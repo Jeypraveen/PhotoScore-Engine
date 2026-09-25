@@ -14,6 +14,8 @@ import logging
 from fastapi import FastAPI, Request, UploadFile, File, Query, HTTPException, Depends, Security
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.responses import JSONResponse
+import hmac
+import hashlib
 
 
 from app.cv_engine import analyze_photo, load_image_from_bytes
@@ -55,6 +57,8 @@ app = FastAPI(
 
 # WhatsApp verification token (set in Meta dashboard)
 VERIFY_TOKEN = os.environ.get("WHATSAPP_VERIFY_TOKEN", "photoscore-verify-2026")
+META_APP_SECRET = os.environ.get("META_APP_SECRET", "default-app-secret")
+RAZORPAY_WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "default-razorpay-secret")
 
 # Pricing by region (for display in messages)
 PRICING = {
@@ -109,6 +113,18 @@ async def verify_webhook(request: Request):
 @app.post("/webhook")
 async def handle_webhook(request: Request):
     """Handle incoming WhatsApp messages — main bot logic."""
+    raw_body = await request.body()
+    signature = request.headers.get("X-Hub-Signature-256", "").replace("sha256=", "")
+    
+    if META_APP_SECRET != "default-app-secret":
+        expected_sig = hmac.new(
+            bytes(META_APP_SECRET, "utf-8"),
+            raw_body,
+            hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(expected_sig, signature):
+            raise HTTPException(status_code=403, detail="Invalid signature")
+
     body = await request.json()
     msg_data = extract_message_data(body)
 
@@ -293,9 +309,19 @@ async def razorpay_webhook(request: Request):
     Receives automated webhook from Razorpay when a user successfully pays.
     Automatically upgrades their account to unlimited checks.
     """
-    body = await request.json()
+    raw_body = await request.body()
+    signature = request.headers.get("X-Razorpay-Signature", "")
     
-    # In production, you would verify the Razorpay signature here using RAZORPAY_KEY_SECRET
+    if RAZORPAY_WEBHOOK_SECRET != "default-razorpay-secret":
+        expected_sig = hmac.new(
+            bytes(RAZORPAY_WEBHOOK_SECRET, "utf-8"),
+            raw_body,
+            hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(expected_sig, signature):
+            raise HTTPException(status_code=403, detail="Invalid signature")
+            
+    body = await request.json()
     
     event = body.get("event")
     if event == "payment.captured":
