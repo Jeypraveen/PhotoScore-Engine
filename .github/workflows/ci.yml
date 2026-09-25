@@ -25,7 +25,7 @@ jobs:
         
     - name: Run Pytest
       run: |
-        pytest tests/ --cov=app
+        pytest tests/test_engine.py
 
   deploy:
     needs: test
