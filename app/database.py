@@ -25,7 +25,7 @@ CREATE TABLE usage (
 
 import os
 import logging
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from supabase import create_client, Client
 
 logger = logging.getLogger(__name__)
@@ -63,7 +63,7 @@ def get_or_create_user(phone: str) -> dict:
     
     if len(response.data) > 0:
         # Update last active
-        supabase.table("users").update({"last_active": datetime.now().isoformat()}).eq("phone_number", phone).execute()
+        supabase.table("users").update({"last_active": datetime.now(timezone.utc).isoformat()}).eq("phone_number", phone).execute()
         return response.data[0]
     
     # 2. If not exists, insert new user
@@ -116,7 +116,7 @@ def get_remaining_checks(phone: str) -> tuple[int, int]:
     if user.get("is_paid"):
         if user.get("paid_until"):
             paid_until = datetime.fromisoformat(user["paid_until"].replace("Z", "+00:00"))
-            if paid_until.timestamp() > datetime.now().timestamp():
+            if paid_until.timestamp() > datetime.now(timezone.utc).timestamp():
                 return (999, 999)  # Unlimited
             else:
                 # Subscription expired

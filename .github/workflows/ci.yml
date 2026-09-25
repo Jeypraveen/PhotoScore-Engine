@@ -12,10 +12,10 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     
-    - name: Set up Python 3.11
-      uses: actions/setup-python@v4
+    - name: Set up Python 3.13
+      uses: actions/setup-python@v5
       with:
-        python-version: "3.11"
+        python-version: "3.13"
         
     - name: Install dependencies
       run: |
@@ -32,10 +32,11 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
-    
-    # Example deployment to Railway/Render
-    - name: Trigger Deployment
+    - name: Trigger Render Deployment
       run: |
-        echo "Deploying to production server using webhook..."
-        # curl -X POST $DEPLOY_WEBHOOK_URL
+        if [ -z "${{ secrets.RENDER_DEPLOY_HOOK_URL }}" ]; then
+          echo "No deploy hook found. Please set RENDER_DEPLOY_HOOK_URL in GitHub Secrets."
+        else
+          echo "Triggering Render deployment..."
+          curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
+        fi

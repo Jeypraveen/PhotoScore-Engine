@@ -12,6 +12,7 @@ Endpoints:
 import os
 import logging
 import asyncio
+from datetime import datetime, timezone
 from fastapi import FastAPI, Request, UploadFile, File, Query, HTTPException, Depends, Security
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.responses import JSONResponse
@@ -71,13 +72,14 @@ PRICING = {
 
 
 # Security & Authentication
-API_KEY = os.environ.get("PHOTOSCORE_API_KEY", "default-dev-key")
+API_KEY = os.environ.get("PHOTOSCORE_API_KEY", "")
 API_KEY_NAME = "X-API-Key"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 
 async def get_api_key(api_key_header: str = Security(api_key_header)):
-    if not API_KEY or API_KEY == "default-dev-key":
-        logger.warning("Using default API key or API key is unset!")
+    if not API_KEY:
+        logger.critical("PHOTOSCORE_API_KEY is not configured! Endpoint access denied.")
+        raise HTTPException(status_code=500, detail="Server misconfiguration")
     
     # Use compare_digest to prevent timing attacks
     if hmac.compare_digest(str(api_key_header), str(API_KEY)):
@@ -271,6 +273,9 @@ async def analyze_endpoint(
         raise HTTPException(status_code=400, detail="File must be an image")
 
     contents = await file.read()
+    if len(contents) > 10 * 1024 * 1024:  # 10MB limit
+        raise HTTPException(status_code=413, detail="File too large")
+        
     img = load_image_from_bytes(contents)
     if img is None:
         raise HTTPException(status_code=400, detail="Could not read image")
@@ -349,8 +354,8 @@ async def razorpay_webhook(request: Request):
         
         if phone:
             # 30 days from now
-            from datetime import datetime, timedelta
-            paid_until = (datetime.now() + timedelta(days=30)).isoformat()
+            from datetime import timedelta
+            paid_until = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
             
             # Upgrade user in the database
             set_user_paid(phone, paid_until)

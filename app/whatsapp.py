@@ -78,7 +78,13 @@ async def download_whatsapp_media(media_id: str) -> bytes | None:
                 return None
 
             media_url = resp.json().get("url")
+            file_size = resp.json().get("file_size", 0)
+            
             if not media_url:
+                return None
+                
+            if file_size > 10 * 1024 * 1024:
+                logger.error("Media file too large (exceeds 10MB)")
                 return None
 
             # Step 2: Download the actual media file
