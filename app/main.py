@@ -11,6 +11,7 @@ Endpoints:
 
 import os
 import logging
+import asyncio
 from fastapi import FastAPI, Request, UploadFile, File, Query, HTTPException, Depends, Security
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.responses import JSONResponse
@@ -57,8 +58,8 @@ app = FastAPI(
 
 # WhatsApp verification token (set in Meta dashboard)
 VERIFY_TOKEN = os.environ.get("WHATSAPP_VERIFY_TOKEN", "photoscore-verify-2026")
-META_APP_SECRET = os.environ.get("META_APP_SECRET", "default-app-secret")
-RAZORPAY_WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "default-razorpay-secret")
+META_APP_SECRET = os.environ.get("META_APP_SECRET", "")
+RAZORPAY_WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
 
 # Pricing by region (for display in messages)
 PRICING = {
@@ -75,7 +76,11 @@ API_KEY_NAME = "X-API-Key"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 
 async def get_api_key(api_key_header: str = Security(api_key_header)):
-    if api_key_header == API_KEY:
+    if not API_KEY or API_KEY == "default-dev-key":
+        logger.warning("Using default API key or API key is unset!")
+    
+    # Use compare_digest to prevent timing attacks
+    if hmac.compare_digest(str(api_key_header), str(API_KEY)):
         return api_key_header
     raise HTTPException(status_code=403, detail="Could not validate API key")
 
@@ -106,7 +111,10 @@ async def verify_webhook(request: Request):
 
     if mode == "subscribe" and token == VERIFY_TOKEN:
         logger.info("Webhook verified ✅")
-        return int(challenge)
+        try:
+            return int(challenge)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=403, detail="Invalid challenge format")
     raise HTTPException(status_code=403, detail="Verification failed")
 
 
@@ -116,14 +124,18 @@ async def handle_webhook(request: Request):
     raw_body = await request.body()
     signature = request.headers.get("X-Hub-Signature-256", "").replace("sha256=", "")
     
-    if META_APP_SECRET != "default-app-secret":
-        expected_sig = hmac.new(
-            bytes(META_APP_SECRET, "utf-8"),
-            raw_body,
-            hashlib.sha256
-        ).hexdigest()
-        if not hmac.compare_digest(expected_sig, signature):
-            raise HTTPException(status_code=403, detail="Invalid signature")
+    if not META_APP_SECRET:
+        logger.critical("META_APP_SECRET is not configured. Webhooks are locked down.")
+        raise HTTPException(status_code=500, detail="Server misconfiguration")
+
+    expected_sig = hmac.new(
+        bytes(META_APP_SECRET, "utf-8"),
+        raw_body,
+        hashlib.sha256
+    ).hexdigest()
+    
+    if not hmac.compare_digest(expected_sig, signature):
+        raise HTTPException(status_code=403, detail="Invalid signature")
 
     body = await request.json()
     msg_data = extract_message_data(body)
@@ -210,13 +222,8 @@ async def handle_image_message(
         await send_whatsapp_message(phone, get_message(lang, "send_photo"))
         return
 
-    # Analyze with CV engine
-    img = load_image_from_bytes(image_bytes)
-    if img is None:
-        await send_whatsapp_message(phone, get_message(lang, "send_photo"))
-        return
-
-    result = analyze_photo(img, marketplace=marketplace)
+    # Analyze with CV engine (Offloaded to a thread to prevent blocking event loop)
+    result = await asyncio.to_thread(analyze_photo, img, marketplace)
 
     # Record usage
     record_usage(phone, result.total_score)
@@ -263,7 +270,7 @@ async def analyze_endpoint(
     if img is None:
         raise HTTPException(status_code=400, detail="Could not read image")
 
-    result = analyze_photo(img, marketplace=marketplace)
+    result = await asyncio.to_thread(analyze_photo, img, marketplace)
 
     return {
         "score": result.total_score,
@@ -312,14 +319,18 @@ async def razorpay_webhook(request: Request):
     raw_body = await request.body()
     signature = request.headers.get("X-Razorpay-Signature", "")
     
-    if RAZORPAY_WEBHOOK_SECRET != "default-razorpay-secret":
-        expected_sig = hmac.new(
-            bytes(RAZORPAY_WEBHOOK_SECRET, "utf-8"),
-            raw_body,
-            hashlib.sha256
-        ).hexdigest()
-        if not hmac.compare_digest(expected_sig, signature):
-            raise HTTPException(status_code=403, detail="Invalid signature")
+    if not RAZORPAY_WEBHOOK_SECRET:
+        logger.critical("RAZORPAY_WEBHOOK_SECRET is not configured.")
+        raise HTTPException(status_code=500, detail="Server misconfiguration")
+
+    expected_sig = hmac.new(
+        bytes(RAZORPAY_WEBHOOK_SECRET, "utf-8"),
+        raw_body,
+        hashlib.sha256
+    ).hexdigest()
+    
+    if not hmac.compare_digest(expected_sig, signature):
+        raise HTTPException(status_code=403, detail="Invalid signature")
             
     body = await request.json()
     
@@ -361,7 +372,7 @@ async def health():
 
 
 @app.get("/stats")
-async def stats():
+async def stats(api_key: str = Depends(get_api_key)):
     """Admin stats endpoint."""
     return {
         "total_users": get_total_users(),

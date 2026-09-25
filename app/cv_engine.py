@@ -165,49 +165,52 @@ def analyze_background(img: np.ndarray) -> BackgroundResult:
 def analyze_product(img: np.ndarray) -> ProductResult:
     """
     Detect the main product in the image using GrabCut segmentation.
-    
-    Calculates: product location, frame fill percentage, centering.
+    Downscales image internally to prevent 10s CPU blocking.
     """
     result = ProductResult()
     h, w = img.shape[:2]
 
-    # GrabCut initialization — assume product is in the center area
-    margin_x = int(w * 0.05)
-    margin_y = int(h * 0.05)
-    rect = (margin_x, margin_y, w - margin_x * 2, h - margin_y * 2)
+    # Downscale for performance
+    scale = min(1.0, 400.0 / max(h, w))
+    small = cv2.resize(img, (int(w * scale), int(h * scale))) if scale < 1.0 else img
+    sh, sw = small.shape[:2]
 
-    mask = np.zeros((h, w), np.uint8)
+    margin_x = int(sw * 0.05)
+    margin_y = int(sh * 0.05)
+    rect = (margin_x, margin_y, sw - margin_x * 2, sh - margin_y * 2)
+
+    mask = np.zeros((sh, sw), np.uint8)
     bgd_model = np.zeros((1, 65), np.float64)
     fgd_model = np.zeros((1, 65), np.float64)
 
     try:
-        cv2.grabCut(img, mask, rect, bgd_model, fgd_model, 3, cv2.GC_INIT_WITH_RECT)
+        cv2.grabCut(small, mask, rect, bgd_model, fgd_model, 3, cv2.GC_INIT_WITH_RECT)
     except cv2.error:
-        # GrabCut can fail on very small or uniform images — fallback
         return _fallback_product_detection(img)
 
-    # Create binary mask: foreground = 1
     fg_mask = np.where((mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD), 1, 0).astype(np.uint8)
-
-    # Find product pixels
     product_pixels = np.where(fg_mask == 1)
     if len(product_pixels[0]) == 0:
         return _fallback_product_detection(img)
 
     result.product_found = True
 
-    # Bounding box of the product
-    y_min, y_max = int(product_pixels[0].min()), int(product_pixels[0].max())
-    x_min, x_max = int(product_pixels[1].min()), int(product_pixels[1].max())
+    # Bounding box of the product on small image
+    sy_min, sy_max = int(product_pixels[0].min()), int(product_pixels[0].max())
+    sx_min, sx_max = int(product_pixels[1].min()), int(product_pixels[1].max())
+    
+    # Scale back to original dimensions
+    x_min, x_max = int(sx_min / scale), int(sx_max / scale)
+    y_min, y_max = int(sy_min / scale), int(sy_max / scale)
     result.bounding_box = (x_min, y_min, x_max - x_min, y_max - y_min)
 
     # Product fill percentage
     product_area = float(fg_mask.sum())
-    total_area = float(h * w)
+    total_area = float(sh * sw)
     result.product_fill_percent = round((product_area / total_area) * 100, 1)
     result.is_well_framed = result.product_fill_percent > 50
 
-    # Centering check
+    # Centering check on original coords
     product_cx = (x_min + x_max) / 2
     product_cy = (y_min + y_max) / 2
     offset_x = abs(product_cx - w / 2) / w * 100
@@ -310,18 +313,17 @@ def analyze_sharpness(img: np.ndarray) -> SharpnessResult:
 def analyze_lighting(img: np.ndarray) -> LightingResult:
     """
     Check if image has good lighting — not too dark, not too bright.
-    
-    Also checks contrast and exposure distribution.
+    Uses HSV Value channel to prevent saturated colors from reading as dark.
     """
     result = LightingResult()
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    v_channel = hsv[:, :, 2]
 
-    result.brightness = round(float(gray.mean()), 1)
-    result.contrast = round(float(gray.std()), 1)
+    result.brightness = round(float(v_channel.mean()), 1)
+    result.contrast = round(float(v_channel.std()), 1)
 
-    # Check overexposure (too many pure white pixels that aren't background)
-    result.overexposed_pct = round(float((gray > 250).mean() * 100), 1)
-    result.underexposed_pct = round(float((gray < 10).mean() * 100), 1)
+    result.overexposed_pct = round(float((v_channel > 250).mean() * 100), 1)
+    result.underexposed_pct = round(float((v_channel < 20).mean() * 100), 1)
 
     # Good lighting: brightness 100-210, contrast 40-100
     good_brightness = 100 <= result.brightness <= 210
@@ -358,11 +360,10 @@ def analyze_lighting(img: np.ndarray) -> LightingResult:
 # 5. TEXT / WATERMARK DETECTION
 # ─────────────────────────────────────────────
 
-def analyze_text_watermark(img: np.ndarray) -> TextDetectionResult:
+def analyze_text_watermark(img: np.ndarray, product_bbox: tuple = None) -> TextDetectionResult:
     """
     Detect text or watermark overlays using MSER (Maximally Stable Extremal Regions).
-    
-    Marketplaces like Amazon/eBay reject images with text, logos, or watermarks.
+    Only counts regions outside the main product to avoid flagging product logos.
     """
     result = TextDetectionResult()
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -371,40 +372,42 @@ def analyze_text_watermark(img: np.ndarray) -> TextDetectionResult:
     # MSER detects stable text-like regions
     mser = cv2.MSER_create(
         delta=5,
-        min_area=30,
-        max_area=int(h * w * 0.01),  # Max 1% of image
+        min_area=100,
+        max_area=int(h * w * 0.05),
     )
 
     try:
         regions, _ = mser.detectRegions(gray)
     except cv2.error:
-        result.score = 15  # Assume no text if detection fails
+        result.score = 15
         return result
 
-    # Filter for text-like shapes
+    # Filter for text-like shapes outside the product
     text_like_count = 0
     for region in regions:
         x, y, rw, rh = cv2.boundingRect(region)
+        
+        if product_bbox:
+            px, py, pw, ph = product_bbox
+            cx, cy = x + rw/2, y + rh/2
+            if px < cx < px + pw and py < cy < py + ph:
+                continue
+
         aspect_ratio = rw / max(rh, 1)
         area = rw * rh
-        # Text characters: small, reasonable aspect ratio
-        if 20 < area < 3000 and 0.2 < aspect_ratio < 5:
+        if 50 < area < 2000 and 0.5 < aspect_ratio < 4:
             text_like_count += 1
 
     result.text_regions_count = text_like_count
-
-    # Threshold: if many text-like regions cluster → likely has text
-    # Typical product photo without text: < 15 regions
-    # Photo with watermark/text: > 30 regions
-    result.has_watermark_or_text = text_like_count > 25
+    result.has_watermark_or_text = text_like_count > 10
 
     # Score (out of 15)
     if not result.has_watermark_or_text:
         result.score = 15
-    elif text_like_count > 50:
-        result.score = 0  # Lots of text
+    elif text_like_count > 30:
+        result.score = 0
     else:
-        result.score = max(0, 15 - int(text_like_count / 3))
+        result.score = max(0, 15 - int(text_like_count / 2))
 
     return result
 
@@ -511,7 +514,7 @@ def analyze_photo(
     result.product = analyze_product(img)
     result.sharpness = analyze_sharpness(img)
     result.lighting = analyze_lighting(img)
-    result.text_detection = analyze_text_watermark(img)
+    result.text_detection = analyze_text_watermark(img, product_bbox=result.product.bounding_box if result.product.product_found else None)
 
     # Resolution check
     result.resolution_ok, result.resolution_width, result.resolution_height = (
@@ -613,6 +616,13 @@ def _generate_issues(result: PhotoScoreResult, marketplace: str) -> list[dict]:
                 "type": "framing",
                 "severity": "high",
                 "code": "PRODUCT_TOO_SMALL",
+                "detail_key": "product_too_small",
+            })
+        elif result.product.product_fill_percent < 80 and marketplace == "amazon":
+            issues.append({
+                "type": "framing",
+                "severity": "medium",
+                "code": "AMAZON_FILL_TOO_LOW",
                 "detail_key": "product_too_small",
             })
         elif not result.product.is_centered:
