@@ -46,6 +46,7 @@ from app.database import (
     get_total_checks,
     get_paid_users,
     set_user_paid,
+    get_supabase,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -294,7 +295,9 @@ async def analyze_endpoint(
     if img is None:
         raise HTTPException(status_code=400, detail="Could not read image")
 
-    result = await asyncio.to_thread(analyze_photo, img, marketplace)
+    result = await asyncio.wait_for(
+        asyncio.to_thread(analyze_photo, img, marketplace), timeout=20
+    )
 
     return {
         "score": result.total_score,
@@ -392,7 +395,13 @@ async def razorpay_webhook(request: Request):
 @app.get("/health")
 async def health():
     """Health check endpoint."""
-    return {"status": "ok", "service": "PhotoScore", "version": "1.0.0"}
+    try:
+        supabase = get_supabase()
+        supabase.table("users").select("phone_number").limit(1).execute()
+        return {"status": "ok", "service": "PhotoScore", "version": "1.0.0", "db": "connected"}
+    except Exception as e:
+        logger.error(f"Healthcheck failed: {e}")
+        raise HTTPException(status_code=503, detail="Service Unavailable - Database connection failed")
 
 
 @app.get("/stats")

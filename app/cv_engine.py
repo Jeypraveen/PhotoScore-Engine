@@ -184,6 +184,7 @@ def analyze_product(img: np.ndarray) -> ProductResult:
     fgd_model = np.zeros((1, 65), np.float64)
 
     try:
+        cv2.setRNGSeed(42)
         cv2.grabCut(small, mask, rect, bgd_model, fgd_model, 3, cv2.GC_INIT_WITH_RECT)
     except cv2.error:
         return _fallback_product_detection(img)
