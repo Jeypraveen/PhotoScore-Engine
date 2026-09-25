@@ -34,10 +34,15 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 FREE_DAILY_LIMIT = 5
 
+_client: Client | None = None
+
 def get_supabase() -> Client:
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set in .env")
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
+    global _client
+    if _client is None:
+        if not SUPABASE_URL or not SUPABASE_KEY:
+            raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set in .env")
+        _client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    return _client
 
 def init_db():
     """Verify Supabase connection on startup."""
@@ -58,23 +63,21 @@ def get_or_create_user(phone: str) -> dict:
     """Get existing user or create new one in Supabase."""
     supabase = get_supabase()
     
-    # 1. Try to fetch user
+    # 1. First fetch to check if we already have the language/marketplace defaults set
     response = supabase.table("users").select("*").eq("phone_number", phone).execute()
-    
     if len(response.data) > 0:
-        # Update last active
+        # Atomic update of last_active
         supabase.table("users").update({"last_active": datetime.now(timezone.utc).isoformat()}).eq("phone_number", phone).execute()
         return response.data[0]
     
-    # 2. If not exists, insert new user
-    new_user = {
-        "phone_number": phone,
-        "language": "en",
-        "marketplace": "amazon",
-        "is_paid": False,
-        "paid_until": None
-    }
-    response = supabase.table("users").insert(new_user).execute()
+    # 2. Atomic upsert for new user to avoid race conditions
+    response = supabase.table("users").upsert(
+        {
+            "phone_number": phone,
+            "last_active": datetime.now(timezone.utc).isoformat(),
+        },
+        on_conflict="phone_number",
+    ).execute()
     return response.data[0]
 
 def set_user_language(phone: str, lang: str):

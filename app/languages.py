@@ -215,7 +215,7 @@ def get_score_emoji(score: int) -> str:
         return "❌"
 
 
-def format_score_report(result, lang: str = "en", remaining: int = 5, total: int = 5, price: str = "₹299") -> str:
+def format_score_report(result, lang: str = "en", remaining: int = 5, total: int = 5, price: str = "₹299", marketplace: str = "amazon") -> str:
     """Format a complete score report message for WhatsApp."""
     emoji = get_score_emoji(result.total_score)
     lines = []
@@ -257,7 +257,8 @@ def format_score_report(result, lang: str = "en", remaining: int = 5, total: int
     lines.append(get_message(lang, "marketplace_result", results="\n".join(mp_lines)))
 
     # Verdict and Strategies
-    if result.total_score >= 80:
+    passed_own_marketplace = result.marketplace_pass.get(marketplace, False)
+    if passed_own_marketplace:
         lines.append(get_message(lang, "photo_great"))
     elif len(result.issues) > 0:
         lines.append(get_message(lang, "fix_and_retry"))

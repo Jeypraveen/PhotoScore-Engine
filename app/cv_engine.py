@@ -468,11 +468,13 @@ def check_marketplace_compliance(
             bg.is_white_bg
             and resolution_ok
             and not sharpness.is_blurry
+            and not text.has_watermark_or_text
         ),
         "etsy": (
             sharpness.is_sharp
             and lighting.is_good_lighting
             and resolution_ok
+            and not text.has_watermark_or_text
         ),
         "ebay": (
             not text.has_watermark_or_text
@@ -483,11 +485,13 @@ def check_marketplace_compliance(
             sharpness.is_sharp
             and resolution_ok
             and lighting.is_good_lighting
+            and not text.has_watermark_or_text
         ),
         "other": (
             sharpness.is_sharp
             and bg.is_clean_bg
             and resolution_ok
+            and not text.has_watermark_or_text
         ),
     }
     return rules.get(marketplace, resolution_ok and not sharpness.is_blurry)

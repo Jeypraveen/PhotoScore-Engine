@@ -58,7 +58,7 @@ app = FastAPI(
 )
 
 # WhatsApp verification token (set in Meta dashboard)
-VERIFY_TOKEN = os.environ.get("WHATSAPP_VERIFY_TOKEN", "photoscore-verify-2026")
+VERIFY_TOKEN = os.environ.get("WHATSAPP_VERIFY_TOKEN")
 META_APP_SECRET = os.environ.get("META_APP_SECRET", "")
 RAZORPAY_WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
 
@@ -107,6 +107,10 @@ def startup():
 @app.get("/webhook")
 async def verify_webhook(request: Request):
     """WhatsApp webhook verification (required by Meta during setup)."""
+    if not VERIFY_TOKEN:
+        logger.critical("WHATSAPP_VERIFY_TOKEN is not configured.")
+        raise HTTPException(status_code=500, detail="Server misconfiguration")
+
     mode = request.query_params.get("hub.mode")
     token = request.query_params.get("hub.verify_token")
     challenge = request.query_params.get("hub.challenge")
@@ -201,49 +205,54 @@ async def handle_image_message(
     phone: str, media_id: str, user: dict, lang: str, marketplace: str
 ):
     """Handle image messages — download, analyze, and reply with score."""
+    try:
+        # Check usage limits
+        if not can_check(phone):
+            price = get_price_for_phone(phone)
+            await send_whatsapp_message(
+                phone,
+                get_message(
+                    lang, "limit_reached",
+                    price=price,
+                    payment_link="https://photoscore.app/pay",  # Replace with real link
+                ),
+            )
+            return
 
-    # Check usage limits
-    if not can_check(phone):
-        price = get_price_for_phone(phone)
-        await send_whatsapp_message(
-            phone,
-            get_message(
-                lang, "limit_reached",
-                price=price,
-                payment_link="https://photoscore.app/pay",  # Replace with real link
-            ),
+        # Send "analyzing" message
+        await send_whatsapp_message(phone, get_message(lang, "analyzing"))
+
+        # Download image from WhatsApp
+        image_bytes = await download_whatsapp_media(media_id)
+        if not image_bytes:
+            await send_whatsapp_message(phone, get_message(lang, "send_photo"))
+            return
+
+        # Analyze with CV engine (Offloaded to a thread to prevent blocking event loop)
+        img = load_image_from_bytes(image_bytes)
+        if img is None:
+            await send_whatsapp_message(phone, get_message(lang, "send_photo"))
+            return
+            
+        result = await asyncio.wait_for(
+            asyncio.to_thread(analyze_photo, img, marketplace), timeout=20
         )
-        return
 
-    # Send "analyzing" message
-    await send_whatsapp_message(phone, get_message(lang, "analyzing"))
+        # Record usage
+        record_usage(phone, result.total_score)
 
-    # Download image from WhatsApp
-    image_bytes = await download_whatsapp_media(media_id)
-    if not image_bytes:
+        # Get remaining checks
+        remaining, total = get_remaining_checks(phone)
+
+        # Format and send report
+        price = get_price_for_phone(phone)
+        report = format_score_report(
+            result, lang=lang, remaining=remaining, total=total, price=price, marketplace=marketplace
+        )
+        await send_whatsapp_message(phone, report)
+    except Exception as e:
+        logger.exception(f"Failed to process image for {phone}: {e}")
         await send_whatsapp_message(phone, get_message(lang, "send_photo"))
-        return
-
-    # Analyze with CV engine (Offloaded to a thread to prevent blocking event loop)
-    img = load_image_from_bytes(image_bytes)
-    if img is None:
-        await send_whatsapp_message(phone, get_message(lang, "send_photo"))
-        return
-        
-    result = await asyncio.to_thread(analyze_photo, img, marketplace)
-
-    # Record usage
-    record_usage(phone, result.total_score)
-
-    # Get remaining checks
-    remaining, total = get_remaining_checks(phone)
-
-    # Format and send report
-    price = get_price_for_phone(phone)
-    report = format_score_report(
-        result, lang=lang, remaining=remaining, total=total, price=price
-    )
-    await send_whatsapp_message(phone, report)
 
 
 def get_price_for_phone(phone: str) -> str:
@@ -260,6 +269,7 @@ def get_price_for_phone(phone: str) -> str:
 
 @app.post("/api/analyze")
 async def analyze_endpoint(
+    request: Request,
     file: UploadFile = File(...),
     marketplace: str = Query("amazon", description="Target marketplace"),
     api_key: str = Depends(get_api_key),
@@ -271,6 +281,10 @@ async def analyze_endpoint(
     """
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image")
+
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File too large")
 
     contents = await file.read()
     if len(contents) > 10 * 1024 * 1024:  # 10MB limit
