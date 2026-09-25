@@ -223,6 +223,11 @@ async def handle_image_message(
         return
 
     # Analyze with CV engine (Offloaded to a thread to prevent blocking event loop)
+    img = load_image_from_bytes(image_bytes)
+    if img is None:
+        await send_whatsapp_message(phone, get_message(lang, "send_photo"))
+        return
+        
     result = await asyncio.to_thread(analyze_photo, img, marketplace)
 
     # Record usage
