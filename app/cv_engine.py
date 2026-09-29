@@ -309,13 +309,13 @@ def analyze_sharpness(img: np.ndarray) -> SharpnessResult:
     variance = float(laplacian.var())
 
     result.laplacian_variance = round(variance, 1)
-    result.is_sharp = variance > 100
+    result.is_sharp = variance > 75
     result.is_blurry = variance < 50
 
     # Score (out of 20)
-    if variance > 200:
+    if variance > 150:
         result.score = 20
-    elif variance > 100:
+    elif variance > 75:
         result.score = 16
     elif variance > 50:
         result.score = 10
@@ -346,8 +346,8 @@ def analyze_lighting(img: np.ndarray) -> LightingResult:
     result.overexposed_pct = round(float((v_channel > 250).mean() * 100), 1)
     result.underexposed_pct = round(float((v_channel < 20).mean() * 100), 1)
 
-    # Good lighting: brightness 100-210, contrast 40-100
-    good_brightness = 100 <= result.brightness <= 210
+    # Good lighting: brightness 100-235, contrast > 30
+    good_brightness = 100 <= result.brightness <= 235
     good_contrast = result.contrast > 30
     not_overexposed = result.overexposed_pct < 40
     not_underexposed = result.underexposed_pct < 10
