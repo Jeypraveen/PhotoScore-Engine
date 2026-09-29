@@ -121,6 +121,7 @@ def extract_message_data(body: dict) -> dict | None:
         msg_type = msg.get("type", "")
 
         data = {
+            "wamid": msg.get("id", ""),
             "phone": phone,
             "type": msg_type,
             "text_body": "",

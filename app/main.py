@@ -13,7 +13,7 @@ import os
 import logging
 import asyncio
 from datetime import datetime, timezone
-from fastapi import FastAPI, Request, UploadFile, File, Query, HTTPException, Depends, Security
+from fastapi import FastAPI, Request, UploadFile, File, Query, HTTPException, Depends, Security, BackgroundTasks
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.responses import JSONResponse
 import hmac
@@ -57,6 +57,7 @@ from app.database import (
     get_paid_users,
     set_user_paid,
     get_supabase,
+    claim_event,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -136,7 +137,7 @@ async def verify_webhook(request: Request):
 
 
 @app.post("/webhook")
-async def handle_webhook(request: Request):
+async def handle_webhook(request: Request, background_tasks: BackgroundTasks):
     """Handle incoming WhatsApp messages — main bot logic."""
     raw_body = await request.body()
     signature = request.headers.get("X-Hub-Signature-256", "")
@@ -154,6 +155,17 @@ async def handle_webhook(request: Request):
     if not msg_data:
         return JSONResponse({"status": "no message"})
 
+    wamid = msg_data.get("wamid")
+    if wamid:
+        is_new = await asyncio.to_thread(claim_event, wamid)
+        if not is_new:
+            return JSONResponse({"status": "ok"})
+
+    background_tasks.add_task(process_whatsapp_message, msg_data)
+    return JSONResponse({"status": "ok"})
+
+
+async def process_whatsapp_message(msg_data: dict):
     phone = msg_data["phone"]
     msg_type = msg_data["type"]
 
@@ -170,8 +182,6 @@ async def handle_webhook(request: Request):
     # ── IMAGE MESSAGE ──
     elif msg_type == "image":
         await handle_image_message(phone, msg_data["media_id"], user, lang, marketplace)
-
-    return JSONResponse({"status": "ok"})
 
 
 async def handle_text_message(phone: str, text: str, user: dict, lang: str):
@@ -341,13 +351,14 @@ async def analyze_endpoint(
 # ─────────────────────────────────────────────
 
 @app.post("/payment/webhook")
-async def razorpay_webhook(request: Request):
+async def razorpay_webhook(request: Request, background_tasks: BackgroundTasks):
     """
     Receives automated webhook from Razorpay when a user successfully pays.
     Automatically upgrades their account to unlimited checks.
     """
     raw_body = await request.body()
     signature = request.headers.get("X-Razorpay-Signature", "")
+    event_id = request.headers.get("X-Razorpay-Event-Id", "")
     
     if not RAZORPAY_WEBHOOK_SECRET:
         logger.critical("RAZORPAY_WEBHOOK_SECRET is not configured.")
@@ -355,6 +366,11 @@ async def razorpay_webhook(request: Request):
 
     if not verify_sig(RAZORPAY_WEBHOOK_SECRET, raw_body, signature):
         raise HTTPException(status_code=403, detail="Invalid signature")
+        
+    if event_id:
+        is_new = await asyncio.to_thread(claim_event, event_id)
+        if not is_new:
+            return JSONResponse({"status": "ok"})
             
     body = await request.json()
     PLAN_PAISE = 29900  # ₹299
@@ -373,12 +389,19 @@ async def razorpay_webhook(request: Request):
         currency = payload.get("currency")
         
         if status == "captured" and amount == PLAN_PAISE and currency == "INR" and phone:
-            # 30 days from now
+            user = await asyncio.to_thread(get_or_create_user, phone)
+            current_paid_until = user.get("paid_until")
+            
             from datetime import timedelta
-            paid_until = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+            now = datetime.now(timezone.utc)
+            
+            if current_paid_until and datetime.fromisoformat(current_paid_until.replace("Z", "+00:00")) > now:
+                new_paid_until = (datetime.fromisoformat(current_paid_until.replace("Z", "+00:00")) + timedelta(days=30)).isoformat()
+            else:
+                new_paid_until = (now + timedelta(days=30)).isoformat()
             
             # Upgrade user in the database
-            updated = await asyncio.to_thread(set_user_paid, phone, paid_until)
+            updated = await asyncio.to_thread(set_user_paid, phone, new_paid_until)
             
             if updated:
                 await send_whatsapp_message(

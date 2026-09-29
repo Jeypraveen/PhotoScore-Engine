@@ -25,7 +25,11 @@ jobs:
         
     - name: Run Pytest
       run: |
-        python -m pytest tests/test_engine.py
+        python -m pytest tests/test_engine.py tests/test_api.py
+        
+    - name: Test Docker Build
+      run: |
+        docker build -t photoscore-test .
 
   deploy:
     needs: test

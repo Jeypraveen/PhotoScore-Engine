@@ -21,6 +21,11 @@ CREATE TABLE usage (
     used_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     score INTEGER DEFAULT 0
 );
+
+CREATE TABLE processed_events (
+    id TEXT PRIMARY KEY,
+    processed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
 """
 
 import os
@@ -154,3 +159,20 @@ def get_paid_users() -> int:
     supabase = get_supabase()
     resp = supabase.table("users").select("phone_number", count="exact").eq("is_paid", True).execute()
     return resp.count if resp.count is not None else 0
+
+# ─────────────────────────────────────────────
+# DEDUPLICATION
+# ─────────────────────────────────────────────
+
+def claim_event(event_id: str) -> bool:
+    """
+    Returns True if the event was successfully claimed (not seen before).
+    Returns False if the event was already processed.
+    """
+    try:
+        supabase = get_supabase()
+        supabase.table("processed_events").insert({"id": event_id}).execute()
+        return True
+    except Exception:
+        # If it fails, it usually means the unique constraint (primary key) was violated
+        return False
