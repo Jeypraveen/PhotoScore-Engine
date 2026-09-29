@@ -33,10 +33,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Trigger Render Deployment
+      env:
+        DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
       run: |
-        if [ -z "${{ secrets.RENDER_DEPLOY_HOOK_URL }}" ]; then
+        if [ -z "$DEPLOY_HOOK" ]; then
           echo "No deploy hook found. Please set RENDER_DEPLOY_HOOK_URL in GitHub Secrets."
         else
           echo "Triggering Render deployment..."
-          curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
+          curl -X POST "$DEPLOY_HOOK"
         fi
