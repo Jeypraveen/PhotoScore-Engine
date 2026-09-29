@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse
 import hmac
 import hashlib
 import re
+import razorpay
 
 def verify_sig(secret: str, raw: bytes, header: str) -> bool:
     if not secret or not header:
@@ -74,6 +75,8 @@ app = FastAPI(
 VERIFY_TOKEN = os.environ.get("WHATSAPP_VERIFY_TOKEN")
 META_APP_SECRET = os.environ.get("META_APP_SECRET", "")
 RAZORPAY_WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
+RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "")
+RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
 
 # Pricing by region (for display in messages)
 PRICING = {
@@ -231,7 +234,7 @@ async def handle_image_message(
                 get_message(
                     lang, "limit_reached",
                     price=price,
-                    payment_link="https://photoscore.app/pay",  # Replace with real link
+                    payment_link=await asyncio.to_thread(create_razorpay_link, phone),
                 ),
             )
             return
@@ -280,6 +283,34 @@ def get_price_for_phone(phone: str) -> str:
             return price
     return PRICING["default"]
 
+
+def create_razorpay_link(phone: str, amount_paise: int = 29900) -> str:
+    """Create a dynamic Razorpay payment link with the user's phone attached."""
+    if not RAZORPAY_KEY_ID or not RAZORPAY_KEY_SECRET:
+        return "https://photoscore.app/pay"
+        
+    try:
+        client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+        data = {
+            "amount": amount_paise,
+            "currency": "INR",
+            "description": "PhotoScore Pro (30 Days)",
+            "customer": {
+                "contact": phone
+            },
+            "notify": {
+                "sms": False,
+                "email": False
+            },
+            "notes": {
+                "phone_number": phone
+            }
+        }
+        payment_link = client.payment_link.create(data)
+        return payment_link.get("short_url", "https://photoscore.app/pay")
+    except Exception as e:
+        logger.error(f"Failed to create Razorpay link for {phone}: {e}")
+        return "https://photoscore.app/pay"
 
 # ─────────────────────────────────────────────
 # DIRECT API (for testing and future Shopify app)
