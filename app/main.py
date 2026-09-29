@@ -439,22 +439,27 @@ async def razorpay_webhook(request: Request, background_tasks: BackgroundTasks):
         
         event = body.get("event")
         if event in ("payment.captured", "payment_link.paid"):
-            if event == "payment.captured":
-                payload = body.get("payload", {}).get("payment", {}).get("entity", {})
-                status_expected = "captured"
-            else:
-                payload = body.get("payload", {}).get("payment_link", {}).get("entity", {})
-                status_expected = "paid"
+            payload = body.get("payload", {})
+            pay_entity = (payload.get("payment") or {}).get("entity", {})
+            link_entity = (payload.get("payment_link") or {}).get("entity", {})
             
-            notes = payload.get("notes")
+            if event == "payment.captured":
+                src, status_expected = pay_entity, "captured"
+            else:
+                src, status_expected = link_entity, "paid"
+                
+            payment_id = pay_entity.get("id")
+            
+            # The phone number can be in the notes of the link or the payment
+            notes = src.get("notes") if isinstance(src.get("notes"), dict) else pay_entity.get("notes")
             notes = notes if isinstance(notes, dict) else {}
+            
             digits = re.sub(r"\D", "", str(notes.get("phone_number", "")))
             phone = "91" + digits if len(digits) == 10 else digits
             
-            status = payload.get("status")
-            amount = payload.get("amount")
-            currency = payload.get("currency")
-            payment_id = payload.get("id")
+            status = src.get("status")
+            amount = src.get("amount")
+            currency = src.get("currency")
             
             if status == status_expected and amount == PLAN_PAISE and currency == "INR" and phone and payment_id:
                 # Dedupe on the actual payment/payment_link entity ID to prevent double-delivery double-crediting
