@@ -7,7 +7,11 @@ Each function analyzes one aspect of product photo quality.
 
 import cv2
 import numpy as np
+from io import BytesIO
+from PIL import Image
 from dataclasses import dataclass, field
+
+MAX_PIXELS = 40_000_000
 
 
 @dataclass
@@ -86,9 +90,25 @@ def load_image(image_path: str) -> np.ndarray | None:
 
 
 def load_image_from_bytes(image_bytes: bytes) -> np.ndarray | None:
-    """Load image from raw bytes (for WhatsApp media downloads)."""
+    """Load image from raw bytes (for WhatsApp media downloads), with OOM protection."""
+    try:
+        with Image.open(BytesIO(image_bytes)) as im:
+            w0, h0 = im.size
+    except Exception:
+        return None
+        
+    if w0 * h0 > MAX_PIXELS:
+        return None
+        
     nparr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if img is None:
+        return None
+        
+    s = 1600.0 / max(img.shape[:2])
+    if s < 1:
+        img = cv2.resize(img, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
+        
     return img
 
 
@@ -205,10 +225,10 @@ def analyze_product(img: np.ndarray) -> ProductResult:
     y_min, y_max = int(sy_min / scale), int(sy_max / scale)
     result.bounding_box = (x_min, y_min, x_max - x_min, y_max - y_min)
 
-    # Product fill percentage
-    product_area = float(fg_mask.sum())
-    total_area = float(sh * sw)
-    result.product_fill_percent = round((product_area / total_area) * 100, 1)
+    # Product fill percentage (max of width ratio or height ratio, as Amazon dictates)
+    product_w = x_max - x_min
+    product_h = y_max - y_min
+    result.product_fill_percent = round(max(product_w / w, product_h / h) * 100, 1)
     result.is_well_framed = result.product_fill_percent > 50
 
     # Centering check on original coords
@@ -254,8 +274,8 @@ def _fallback_product_detection(img: np.ndarray) -> ProductResult:
 
     result.product_found = True
     result.bounding_box = (x, y, cw, ch)
-    result.product_fill_percent = round((area / (h * w)) * 100, 1)
-    result.is_well_framed = result.product_fill_percent > 30
+    result.product_fill_percent = round(max(cw / w, ch / h) * 100, 1)
+    result.is_well_framed = result.product_fill_percent > 50
 
     product_cx = x + cw / 2
     product_cy = y + ch / 2

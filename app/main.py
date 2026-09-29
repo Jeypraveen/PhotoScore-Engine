@@ -18,6 +18,16 @@ from fastapi.security.api_key import APIKeyHeader
 from fastapi.responses import JSONResponse
 import hmac
 import hashlib
+import re
+
+def verify_sig(secret: str, raw: bytes, header: str) -> bool:
+    if not secret or not header:
+        return False
+    expected = hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
+    try:
+        return hmac.compare_digest(expected.encode(), header.replace("sha256=", "").encode())
+    except TypeError:
+        return False
 
 
 from app.cv_engine import analyze_photo, load_image_from_bytes
@@ -129,19 +139,13 @@ async def verify_webhook(request: Request):
 async def handle_webhook(request: Request):
     """Handle incoming WhatsApp messages — main bot logic."""
     raw_body = await request.body()
-    signature = request.headers.get("X-Hub-Signature-256", "").replace("sha256=", "")
+    signature = request.headers.get("X-Hub-Signature-256", "")
     
     if not META_APP_SECRET:
         logger.critical("META_APP_SECRET is not configured. Webhooks are locked down.")
         raise HTTPException(status_code=500, detail="Server misconfiguration")
 
-    expected_sig = hmac.new(
-        bytes(META_APP_SECRET, "utf-8"),
-        raw_body,
-        hashlib.sha256
-    ).hexdigest()
-    
-    if not hmac.compare_digest(expected_sig, signature):
+    if not verify_sig(META_APP_SECRET, raw_body, signature):
         raise HTTPException(status_code=403, detail="Invalid signature")
 
     body = await request.json()
@@ -154,8 +158,8 @@ async def handle_webhook(request: Request):
     msg_type = msg_data["type"]
 
     # Get or create user
-    user = get_or_create_user(phone)
-    lang = user.get("language", "en")
+    user = await asyncio.to_thread(get_or_create_user, phone)
+    lang = user.get("language") or "en"
     marketplace = user.get("marketplace", "amazon")
 
     # ── TEXT MESSAGE ──
@@ -173,33 +177,27 @@ async def handle_webhook(request: Request):
 async def handle_text_message(phone: str, text: str, user: dict, lang: str):
     """Handle text messages — language selection, marketplace selection, etc."""
 
-    # Check if it's a language selection (number 1-10)
-    if text in NUMBER_TO_LANG:
-        new_lang = NUMBER_TO_LANG[text]
-        set_user_language(phone, new_lang)
-        await send_whatsapp_message(
-            phone, get_message(new_lang, "welcome")
-        )
+    if user.get("language") is None:
+        if text in NUMBER_TO_LANG:
+            new_lang = NUMBER_TO_LANG[text]
+            await asyncio.to_thread(set_user_language, phone, new_lang)
+            await send_whatsapp_message(phone, get_message(new_lang, "welcome"))
+        else:
+            await send_whatsapp_message(phone, LANGUAGE_MENU)
         return
 
-    # Check if it's a marketplace selection
+    if text in ("lang", "language"):
+        await asyncio.to_thread(set_user_language, phone, None)
+        await send_whatsapp_message(phone, LANGUAGE_MENU)
+        return
+
     if text in MARKETPLACE_MAP:
         mp = MARKETPLACE_MAP[text]
-        set_user_marketplace(phone, mp)
-        await send_whatsapp_message(
-            phone, get_message(lang, "marketplace_set", marketplace=mp.capitalize())
-        )
+        await asyncio.to_thread(set_user_marketplace, phone, mp)
+        await send_whatsapp_message(phone, get_message(lang, "marketplace_set", marketplace=mp.capitalize()))
         return
 
-    # Any other text — check if user has language set
-    if not user.get("language") or user["language"] == "en":
-        # First time user or unset — show language menu
-        await send_whatsapp_message(phone, LANGUAGE_MENU)
-    else:
-        # User has language set — ask for photo
-        await send_whatsapp_message(
-            phone, get_message(lang, "send_photo")
-        )
+    await send_whatsapp_message(phone, get_message(lang, "send_photo"))
 
 
 async def handle_image_message(
@@ -240,10 +238,10 @@ async def handle_image_message(
         )
 
         # Record usage
-        record_usage(phone, result.total_score)
+        await asyncio.to_thread(record_usage, phone, result.total_score)
 
         # Get remaining checks
-        remaining, total = get_remaining_checks(phone)
+        remaining, total = await asyncio.to_thread(get_remaining_checks, phone)
 
         # Format and send report
         price = get_price_for_phone(phone)
@@ -284,10 +282,13 @@ async def analyze_endpoint(
         raise HTTPException(status_code=400, detail="File must be an image")
 
     content_length = request.headers.get("content-length")
-    if content_length and int(content_length) > 10 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="File too large")
+    try:
+        if content_length and int(content_length) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="File too large")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid Content-Length")
 
-    contents = await file.read()
+    contents = await file.read(10 * 1024 * 1024 + 1)
     if len(contents) > 10 * 1024 * 1024:  # 10MB limit
         raise HTTPException(status_code=413, detail="File too large")
         
@@ -350,41 +351,40 @@ async def razorpay_webhook(request: Request):
         logger.critical("RAZORPAY_WEBHOOK_SECRET is not configured.")
         raise HTTPException(status_code=500, detail="Server misconfiguration")
 
-    expected_sig = hmac.new(
-        bytes(RAZORPAY_WEBHOOK_SECRET, "utf-8"),
-        raw_body,
-        hashlib.sha256
-    ).hexdigest()
-    
-    if not hmac.compare_digest(expected_sig, signature):
+    if not verify_sig(RAZORPAY_WEBHOOK_SECRET, raw_body, signature):
         raise HTTPException(status_code=403, detail="Invalid signature")
             
     body = await request.json()
+    PLAN_PAISE = 29900  # ₹299
     
     event = body.get("event")
     if event == "payment.captured":
         payload = body.get("payload", {}).get("payment", {}).get("entity", {})
         
-        # We assume you pass the user's phone number in the payment notes during checkout
-        notes = payload.get("notes", {})
-        phone = notes.get("phone_number")
+        raw_phone = payload.get("notes", {}).get("phone_number", "")
+        phone = re.sub(r"\D", "", str(raw_phone))
         
-        if phone:
+        status = payload.get("status")
+        amount = payload.get("amount")
+        currency = payload.get("currency")
+        
+        if status == "captured" and amount == PLAN_PAISE and currency == "INR" and phone:
             # 30 days from now
             from datetime import timedelta
             paid_until = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
             
             # Upgrade user in the database
-            set_user_paid(phone, paid_until)
+            updated = await asyncio.to_thread(set_user_paid, phone, paid_until)
             
-            # Send them a success message on WhatsApp
-            await send_whatsapp_message(
-                phone, 
-                "🎉 *Payment Successful!*\nYour PhotoScore Pro plan is now active for 30 days. You have UNLIMITED checks! Send a photo to begin 📸"
-            )
-            
-            logger.info(f"Account upgraded to PRO for {phone}")
-            
+            if updated:
+                await send_whatsapp_message(
+                    phone, 
+                    "🎉 *Payment Successful!*\nYour PhotoScore Pro plan is now active for 30 days. You have UNLIMITED checks! Send a photo to begin 📸"
+                )
+                logger.info(f"Account upgraded to PRO for {phone}")
+            else:
+                logger.error(f"Paid but no matching user for phone: {phone}")
+                
     return JSONResponse({"status": "ok"})
 
 

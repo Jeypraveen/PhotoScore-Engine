@@ -9,14 +9,14 @@ Each language has complete message templates for the WhatsApp bot flow.
 SUPPORTED_LANGUAGES = {
     "en": "English",
     "hi": "हिंदी",
-    "pt": "Português",
-    "es": "Español",
-    "fr": "Français",
-    "de": "Deutsch",
-    "tr": "Türkçe",
-    "ar": "العربية",
-    "id": "Bahasa Indonesia",
+    "ta": "தமிழ்",
+    "te": "తెలుగు",
+    "mr": "मराठी",
     "bn": "বাংলা",
+    "es": "Español",
+    "pt": "Português",
+    "fr": "Français",
+    "id": "Bahasa Indonesia",
 }
 
 # Language selection menu (sent on first contact)
@@ -25,22 +25,22 @@ LANGUAGE_MENU = """🌍 *Welcome to PhotoScore!* 📸
 Choose your language / अपनी भाषा चुनें:
 
 1. English
-2. हिंदी
-3. Português
-4. Español
-5. Français
-6. Deutsch
-7. Türkçe
-8. العربية
-9. Bahasa Indonesia
-10. বাংলা
+2. हिंदी (Hindi)
+3. தமிழ் (Tamil)
+4. తెలుగు (Telugu)
+5. मराठी (Marathi)
+6. বাংলা (Bengali)
+7. Español
+8. Português
+9. Français
+10. Bahasa Indonesia
 
 _Reply with the number_ 👆"""
 
 # Map number replies to language codes
 NUMBER_TO_LANG = {
-    "1": "en", "2": "hi", "3": "pt", "4": "es", "5": "fr",
-    "6": "de", "7": "tr", "8": "ar", "9": "id", "10": "bn",
+    "1": "en", "2": "hi", "3": "ta", "4": "te", "5": "mr",
+    "6": "bn", "7": "es", "8": "pt", "9": "fr", "10": "id",
 }
 
 # ─────────────────────────────────────────────
@@ -104,6 +104,34 @@ MESSAGES = {
         "not_centered": "→ Product center में नहीं है\n→ Fix: Product को frame के बीच में रखो",
         "has_text_watermark": "→ Text या watermark detect हुआ\n→ Fix: सारे text, logo, watermark हटाओ",
         "low_resolution": "→ Image resolution कम है\n→ Fix: Camera settings में high resolution select करो",
+    },
+    "ta": {
+        "welcome": "வணக்கம்! 📸 நான் *PhotoScore*\nஉங்கள் தயாரிப்பு புகைப்படத்தை அனுப்பவும், அது விற்குமா என்று நான் சொல்கிறேன்!\n\nஎந்த சந்தை?\n1. Amazon\n2. Flipkart\n3. Meesho\n4. Etsy\n5. eBay\n6. Shopify\n7. Other / Instagram",
+        "marketplace_set": "✅ *{marketplace}* தேர்ந்தெடுக்கப்பட்டது!\nஇப்போது உங்கள் தயாரிப்பு புகைப்படத்தை அனுப்பவும் 📸",
+        "send_photo": "பகுப்பாய்வு செய்ய ஒரு தயாரிப்பு புகைப்படத்தை அனுப்பவும் 📸",
+        "analyzing": "🔍 உங்கள் புகைப்படத்தை பகுப்பாய்வு செய்கிறது...",
+        "score_header": "📊 *PhotoScore: {score}/100* {emoji}",
+        "category_bg": "🔲 பின்னணி ({score}/25)",
+        "category_sharp": "🔍 தெளிவு ({score}/20)",
+        "category_frame": "🎯 ஃப்ரேமிங் ({score}/20)",
+        "category_light": "💡 வெளிச்சம் ({score}/20)",
+        "category_comply": "📋 விதிகள் ({score}/15)",
+        "marketplace_result": "\n*சந்தைக்கு தயார்:*\n{results}",
+        "free_remaining": "\n━━━━━━━━━━━━\n📊 இன்று {remaining}/{total} இலவச சோதனைகள் உள்ளன",
+        "limit_reached": "⚠️ உங்களின் இலவச சோதனைகள் முடிந்துவிட்டன!\n\nவரம்பற்ற சோதனைகள்: *{price}/மாதம்*\n💳 இப்போது செலுத்துங்கள்: {payment_link}",
+        "fix_and_retry": "\n*புகைப்படத்தின் தரத்தை மேம்படுத்த, இதைச் செய்யவும்:*",
+        "photo_great": "\n🎉 *சிறந்த புகைப்படம்! இது விற்கும்!*",
+        "bg_not_white": "→ பின்னணி தூய வெள்ளை அல்ல\n→ சரிசெய்ய: வெள்ளை தாள் அல்லது சுவரைப் பயன்படுத்தவும்",
+        "bg_cluttered": "→ பின்னணி இரைச்சலாக உள்ளது\n→ சரிசெய்ய: சுத்தமான பின்னணியைப் பயன்படுத்தவும்",
+        "photo_blurry": "→ புகைப்படம் மங்கலாக உள்ளது\n→ சரிசெய்ய: போனை நிலையாக வைத்து நல்ல வெளிச்சத்தைப் பயன்படுத்தவும்",
+        "photo_soft": "→ புகைப்படம் சற்று மங்கலாக உள்ளது\n→ சரிசெய்ய: எடுப்பதற்கு முன் ஃபோகஸ் செய்யத் தட்டவும்",
+        "too_dark": "→ புகைப்படம் மிகவும் இருட்டாக உள்ளது\n→ சரிசெய்ய: இயற்கையான வெளிச்சம் உள்ள இடத்தில் எடுக்கவும்",
+        "too_bright": "→ புகைப்படம் மிகவும் பிரகாசமாக உள்ளது\n→ சரிசெய்ய: நேரடி சூரிய ஒளியைத் தவிர்க்கவும்",
+        "low_contrast": "→ குறைந்த மாறுபாடு\n→ சரிசெய்ய: வெளிச்சத்தை மேம்படுத்தவும்",
+        "product_too_small": "→ தயாரிப்பு மிகவும் சிறியதாக உள்ளது\n→ சரிசெய்ய: கேமராவை தயாரிப்புக்கு அருகில் கொண்டு செல்லவும்",
+        "not_centered": "→ தயாரிப்பு மையத்தில் இல்லை\n→ சரிசெய்ய: தயாரிப்பை மையத்தில் வைக்கவும்",
+        "has_text_watermark": "→ உரை அல்லது வாட்டர்மார்க் உள்ளது\n→ சரிசெய்ய: உரை, லோகோக்களை அகற்றவும்",
+        "low_resolution": "→ படத்தின் தெளிவுத்திறன் மிகவும் குறைவு\n→ சரிசெய்ய: உயர் தெளிவுத்திறன் அமைப்புகளைப் பயன்படுத்தவும்",
     },
     "pt": {
         "welcome": "Olá! 📸 Eu sou o *PhotoScore*\nEnvie a foto do seu produto e eu direi se ela vai vender!\n\nQual marketplace?\n1. Amazon\n2. Mercado Livre\n3. Shopee\n4. Etsy\n5. eBay\n6. Shopify",
