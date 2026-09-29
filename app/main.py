@@ -58,6 +58,7 @@ from app.database import (
     set_user_paid,
     get_supabase,
     claim_event,
+    release_event,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -157,9 +158,13 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks):
 
     wamid = msg_data.get("wamid")
     if wamid:
-        is_new = await asyncio.to_thread(claim_event, wamid)
-        if not is_new:
-            return JSONResponse({"status": "ok"})
+        try:
+            is_new = await asyncio.to_thread(claim_event, wamid)
+            if not is_new:
+                return JSONResponse({"status": "ok"})
+        except Exception as e:
+            logger.error(f"Database error during wamid claim: {e}")
+            raise HTTPException(status_code=503, detail="Database error")
 
     background_tasks.add_task(process_whatsapp_message, msg_data)
     return JSONResponse({"status": "ok"})
@@ -368,51 +373,61 @@ async def razorpay_webhook(request: Request, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=403, detail="Invalid signature")
         
     if event_id:
-        is_new = await asyncio.to_thread(claim_event, event_id)
-        if not is_new:
-            return JSONResponse({"status": "ok"})
+        try:
+            is_new = await asyncio.to_thread(claim_event, event_id)
+            if not is_new:
+                return JSONResponse({"status": "ok"})
+        except Exception as e:
+            logger.error(f"Database error during Razorpay event claim: {e}")
+            raise HTTPException(status_code=503, detail="Database error")
             
-    body = await request.json()
-    PLAN_PAISE = 29900  # ₹299
-    
-    event = body.get("event")
-    if event == "payment.captured":
-        payload = body.get("payload", {}).get("payment", {}).get("entity", {})
+    try:
+        body = await request.json()
+        PLAN_PAISE = 29900  # ₹299
         
-        notes = payload.get("notes")
-        notes = notes if isinstance(notes, dict) else {}
-        digits = re.sub(r"\D", "", str(notes.get("phone_number", "")))
-        phone = "91" + digits if len(digits) == 10 else digits
-        
-        status = payload.get("status")
-        amount = payload.get("amount")
-        currency = payload.get("currency")
-        
-        if status == "captured" and amount == PLAN_PAISE and currency == "INR" and phone:
-            user = await asyncio.to_thread(get_or_create_user, phone)
-            current_paid_until = user.get("paid_until")
+        event = body.get("event")
+        if event == "payment.captured":
+            payload = body.get("payload", {}).get("payment", {}).get("entity", {})
             
-            from datetime import timedelta
-            now = datetime.now(timezone.utc)
+            notes = payload.get("notes")
+            notes = notes if isinstance(notes, dict) else {}
+            digits = re.sub(r"\D", "", str(notes.get("phone_number", "")))
+            phone = "91" + digits if len(digits) == 10 else digits
             
-            if current_paid_until and datetime.fromisoformat(current_paid_until.replace("Z", "+00:00")) > now:
-                new_paid_until = (datetime.fromisoformat(current_paid_until.replace("Z", "+00:00")) + timedelta(days=30)).isoformat()
-            else:
-                new_paid_until = (now + timedelta(days=30)).isoformat()
+            status = payload.get("status")
+            amount = payload.get("amount")
+            currency = payload.get("currency")
             
-            # Upgrade user in the database
-            updated = await asyncio.to_thread(set_user_paid, phone, new_paid_until)
-            
-            if updated:
-                await send_whatsapp_message(
-                    phone, 
-                    "🎉 *Payment Successful!*\nYour PhotoScore Pro plan is now active for 30 days. You have UNLIMITED checks! Send a photo to begin 📸"
-                )
-                logger.info(f"Account upgraded to PRO for {phone}")
-            else:
-                logger.error(f"Paid but no matching user for phone: {phone}")
+            if status == "captured" and amount == PLAN_PAISE and currency == "INR" and phone:
+                user = await asyncio.to_thread(get_or_create_user, phone)
+                current_paid_until = user.get("paid_until")
                 
-    return JSONResponse({"status": "ok"})
+                from datetime import timedelta
+                now = datetime.now(timezone.utc)
+                
+                if current_paid_until and datetime.fromisoformat(current_paid_until.replace("Z", "+00:00")) > now:
+                    new_paid_until = (datetime.fromisoformat(current_paid_until.replace("Z", "+00:00")) + timedelta(days=30)).isoformat()
+                else:
+                    new_paid_until = (now + timedelta(days=30)).isoformat()
+                
+                # Upgrade user in the database
+                updated = await asyncio.to_thread(set_user_paid, phone, new_paid_until)
+                
+                if updated:
+                    await send_whatsapp_message(
+                        phone, 
+                        "🎉 *Payment Successful!*\nYour PhotoScore Pro plan is now active for 30 days. You have UNLIMITED checks! Send a photo to begin 📸"
+                    )
+                    logger.info(f"Account upgraded to PRO for {phone}")
+                else:
+                    logger.error(f"Paid but no matching user for phone: {phone}")
+                    
+        return JSONResponse({"status": "ok"})
+    except Exception as e:
+        logger.error(f"Failed to process Razorpay webhook: {e}")
+        if event_id:
+            await asyncio.to_thread(release_event, event_id)
+        raise HTTPException(status_code=500, detail="Internal Server Error")
 
 
 # ─────────────────────────────────────────────

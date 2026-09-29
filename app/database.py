@@ -22,16 +22,22 @@ CREATE TABLE usage (
     score INTEGER DEFAULT 0
 );
 
-CREATE TABLE processed_events (
+CREATE TABLE IF NOT EXISTS processed_events (
     id TEXT PRIMARY KEY,
     processed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE usage ENABLE ROW LEVEL SECURITY;
+ALTER TABLE processed_events ENABLE ROW LEVEL SECURITY;
+
 """
 
 import os
 import logging
 from datetime import datetime, date, timezone
 from supabase import create_client, Client
+from postgrest.exceptions import APIError
 
 logger = logging.getLogger(__name__)
 
@@ -167,12 +173,19 @@ def get_paid_users() -> int:
 def claim_event(event_id: str) -> bool:
     """
     Returns True if the event was successfully claimed (not seen before).
-    Returns False if the event was already processed.
+    Returns False if the event was already processed (unique violation).
+    Raises exception on actual DB errors.
     """
     try:
         supabase = get_supabase()
         supabase.table("processed_events").insert({"id": event_id}).execute()
         return True
-    except Exception:
-        # If it fails, it usually means the unique constraint (primary key) was violated
-        return False
+    except APIError as e:
+        if e.code == "23505":  # unique violation
+            return False
+        raise
+
+def release_event(event_id: str):
+    """Releases the claim on an event if processing fails."""
+    supabase = get_supabase()
+    supabase.table("processed_events").delete().eq("id", event_id).execute()
