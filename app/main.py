@@ -363,8 +363,10 @@ async def razorpay_webhook(request: Request):
     if event == "payment.captured":
         payload = body.get("payload", {}).get("payment", {}).get("entity", {})
         
-        raw_phone = payload.get("notes", {}).get("phone_number", "")
-        phone = re.sub(r"\D", "", str(raw_phone))
+        notes = payload.get("notes")
+        notes = notes if isinstance(notes, dict) else {}
+        digits = re.sub(r"\D", "", str(notes.get("phone_number", "")))
+        phone = "91" + digits if len(digits) == 10 else digits
         
         status = payload.get("status")
         amount = payload.get("amount")

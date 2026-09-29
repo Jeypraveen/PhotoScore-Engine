@@ -89,7 +89,7 @@ def load_image(image_path: str) -> np.ndarray | None:
     return img
 
 
-def load_image_from_bytes(image_bytes: bytes) -> np.ndarray | None:
+def load_image_from_bytes(image_bytes: bytes) -> tuple[np.ndarray, tuple[int, int]] | None:
     """Load image from raw bytes (for WhatsApp media downloads), with OOM protection."""
     try:
         with Image.open(BytesIO(image_bytes)) as im:
@@ -109,7 +109,7 @@ def load_image_from_bytes(image_bytes: bytes) -> np.ndarray | None:
     if s < 1:
         img = cv2.resize(img, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
         
-    return img
+    return img, (w0, h0)
 
 
 # ─────────────────────────────────────────────
