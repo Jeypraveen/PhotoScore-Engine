@@ -31,6 +31,8 @@ ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE usage ENABLE ROW LEVEL SECURITY;
 ALTER TABLE processed_events ENABLE ROW LEVEL SECURITY;
 
+-- Optional: Add this to pg_cron to clean up the dedupe table so it doesn't grow infinitely
+-- SELECT cron.schedule('cleanup_events', '0 0 * * *', $$DELETE FROM processed_events WHERE processed_at < NOW() - INTERVAL '7 days'$$);
 """
 
 import os

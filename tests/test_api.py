@@ -1,6 +1,3 @@
-import os
-os.environ["PHOTOSCORE_API_KEY"] = "testkey123"
-
 import pytest
 from fastapi.testclient import TestClient
 from app.main import app

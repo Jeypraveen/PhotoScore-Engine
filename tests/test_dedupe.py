@@ -1,7 +1,3 @@
-import os
-os.environ["META_APP_SECRET"] = "dummysecret"
-os.environ["RAZORPAY_WEBHOOK_SECRET"] = "dummysecret"
-
 import pytest
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient

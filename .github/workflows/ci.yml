@@ -25,7 +25,7 @@ jobs:
         
     - name: Run Pytest
       run: |
-        python -m pytest tests/test_engine.py tests/test_api.py
+        python -m pytest tests/test_engine.py tests/test_api.py tests/test_dedupe.py
         
     - name: Test Docker Build
       run: |

@@ -171,22 +171,25 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks):
 
 
 async def process_whatsapp_message(msg_data: dict):
-    phone = msg_data["phone"]
-    msg_type = msg_data["type"]
-
-    # Get or create user
-    user = await asyncio.to_thread(get_or_create_user, phone)
-    lang = user.get("language") or "en"
-    marketplace = user.get("marketplace", "amazon")
-
-    # ── TEXT MESSAGE ──
-    if msg_type == "text":
-        text = msg_data["text_body"].lower().strip()
-        await handle_text_message(phone, text, user, lang)
-
-    # ── IMAGE MESSAGE ──
-    elif msg_type == "image":
-        await handle_image_message(phone, msg_data["media_id"], user, lang, marketplace)
+    try:
+        phone = msg_data["phone"]
+        msg_type = msg_data["type"]
+    
+        # Get or create user
+        user = await asyncio.to_thread(get_or_create_user, phone)
+        lang = user.get("language") or "en"
+        marketplace = user.get("marketplace", "amazon")
+    
+        # ── TEXT MESSAGE ──
+        if msg_type == "text":
+            text = msg_data["text_body"].lower().strip()
+            await handle_text_message(phone, text, user, lang)
+    
+        # ── IMAGE MESSAGE ──
+        elif msg_type == "image":
+            await handle_image_message(phone, msg_data["media_id"], user, lang, marketplace)
+    except Exception as e:
+        logger.error(f"Failed to process background WhatsApp message: {e}")
 
 
 async def handle_text_message(phone: str, text: str, user: dict, lang: str):
