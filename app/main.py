@@ -448,7 +448,7 @@ async def razorpay_webhook(request: Request, background_tasks: BackgroundTasks):
             else:
                 src, status_expected = link_entity, "paid"
                 
-            payment_id = pay_entity.get("id")
+            payment_id = pay_entity.get("id") or link_entity.get("id")
             
             # The phone number can be in the notes of the link or the payment
             notes = src.get("notes") if isinstance(src.get("notes"), dict) else pay_entity.get("notes")
@@ -500,6 +500,11 @@ async def razorpay_webhook(request: Request, background_tasks: BackgroundTasks):
                     # Release the payment claim if something fails during the upgrade
                     await asyncio.to_thread(release_event, dedupe_key)
                     raise
+            else:
+                logger.warning(
+                    "Ignored %s for %s: status=%s amount=%s currency=%s phone=%s payment_id=%s",
+                    event, event_id, status, amount, currency, bool(phone), payment_id
+                )
                     
         return JSONResponse({"status": "ok"})
     except Exception as e:
