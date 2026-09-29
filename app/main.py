@@ -454,30 +454,47 @@ async def razorpay_webhook(request: Request, background_tasks: BackgroundTasks):
             status = payload.get("status")
             amount = payload.get("amount")
             currency = payload.get("currency")
+            payment_id = payload.get("id")
             
-            if status == status_expected and amount == PLAN_PAISE and currency == "INR" and phone:
-                user = await asyncio.to_thread(get_or_create_user, phone)
-                current_paid_until = user.get("paid_until")
-                
-                from datetime import timedelta
-                now = datetime.now(timezone.utc)
-                
-                if current_paid_until and datetime.fromisoformat(current_paid_until.replace("Z", "+00:00")) > now:
-                    new_paid_until = (datetime.fromisoformat(current_paid_until.replace("Z", "+00:00")) + timedelta(days=30)).isoformat()
-                else:
-                    new_paid_until = (now + timedelta(days=30)).isoformat()
-                
-                # Upgrade user in the database
-                updated = await asyncio.to_thread(set_user_paid, phone, new_paid_until)
-                
-                if updated:
-                    await send_whatsapp_message(
-                        phone, 
-                        "🎉 *Payment Successful!*\nYour PhotoScore Pro plan is now active for 30 days. You have UNLIMITED checks! Send a photo to begin 📸"
-                    )
-                    logger.info(f"Account upgraded to PRO for {phone}")
-                else:
-                    logger.error(f"Paid but no matching user for phone: {phone}")
+            if status == status_expected and amount == PLAN_PAISE and currency == "INR" and phone and payment_id:
+                # Dedupe on the actual payment/payment_link entity ID to prevent double-delivery double-crediting
+                dedupe_key = f"pay:{payment_id}"
+                try:
+                    is_new_payment = await asyncio.to_thread(claim_event, dedupe_key)
+                    if not is_new_payment:
+                        logger.info(f"Payment {payment_id} already processed. Skipping.")
+                        return JSONResponse({"status": "ok"})
+                except Exception as e:
+                    logger.error(f"Database error during Razorpay payment claim: {e}")
+                    raise HTTPException(status_code=503, detail="Database error")
+                    
+                try:
+                    user = await asyncio.to_thread(get_or_create_user, phone)
+                    current_paid_until = user.get("paid_until")
+                    
+                    from datetime import timedelta
+                    now = datetime.now(timezone.utc)
+                    
+                    if current_paid_until and datetime.fromisoformat(current_paid_until.replace("Z", "+00:00")) > now:
+                        new_paid_until = (datetime.fromisoformat(current_paid_until.replace("Z", "+00:00")) + timedelta(days=30)).isoformat()
+                    else:
+                        new_paid_until = (now + timedelta(days=30)).isoformat()
+                    
+                    # Upgrade user in the database
+                    updated = await asyncio.to_thread(set_user_paid, phone, new_paid_until)
+                    
+                    if updated:
+                        await send_whatsapp_message(
+                            phone, 
+                            "🎉 *Payment Successful!*\nYour PhotoScore Pro plan is now active for 30 days. You have UNLIMITED checks! Send a photo to begin 📸"
+                        )
+                        logger.info(f"Account upgraded to PRO for {phone}")
+                    else:
+                        logger.error(f"Paid but no matching user for phone: {phone}")
+                except Exception:
+                    # Release the payment claim if something fails during the upgrade
+                    await asyncio.to_thread(release_event, dedupe_key)
+                    raise
                     
         return JSONResponse({"status": "ok"})
     except Exception as e:

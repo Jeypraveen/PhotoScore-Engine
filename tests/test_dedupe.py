@@ -52,11 +52,13 @@ def test_razorpay_failure_after_claim(mock_get_user, mock_release, mock_claim, m
         headers={"X-Razorpay-Event-Id": "evt_456"},
         json={
             "event": "payment.captured",
-            "payload": {"payment": {"entity": {"status": "captured", "amount": 29900, "currency": "INR", "notes": {"phone_number": "9999999999"}}}}
+            "payload": {"payment": {"entity": {"id": "pay_123", "status": "captured", "amount": 29900, "currency": "INR", "notes": {"phone_number": "9999999999"}}}}
         }
     )
     
     # Expected to throw 500 so Razorpay retries
     assert response.status_code == 500
-    # Also expected to have released the event
-    mock_release.assert_called_once_with("evt_456")
+    # Also expected to have released both the event and the payment entity
+    mock_release.assert_any_call("pay:pay_123")
+    mock_release.assert_any_call("evt_456")
+    assert mock_release.call_count == 2
