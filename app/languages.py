@@ -10,13 +10,9 @@ SUPPORTED_LANGUAGES = {
     "en": "English",
     "hi": "हिंदी",
     "ta": "தமிழ்",
-    "te": "తెలుగు",
-    "mr": "मराठी",
-    "bn": "বাংলা",
     "es": "Español",
     "pt": "Português",
     "fr": "Français",
-    "id": "Bahasa Indonesia",
 }
 
 # Language selection menu (sent on first contact)
@@ -27,20 +23,15 @@ Choose your language / अपनी भाषा चुनें:
 1. English
 2. हिंदी (Hindi)
 3. தமிழ் (Tamil)
-4. తెలుగు (Telugu)
-5. मराठी (Marathi)
-6. বাংলা (Bengali)
-7. Español
-8. Português
-9. Français
-10. Bahasa Indonesia
+4. Español
+5. Português
+6. Français
 
 _Reply with the number_ 👆"""
 
 # Map number replies to language codes
 NUMBER_TO_LANG = {
-    "1": "en", "2": "hi", "3": "ta", "4": "te", "5": "mr",
-    "6": "bn", "7": "es", "8": "pt", "9": "fr", "10": "id",
+    "1": "en", "2": "hi", "3": "ta", "4": "es", "5": "pt", "6": "fr"
 }
 
 # ─────────────────────────────────────────────

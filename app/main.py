@@ -228,13 +228,14 @@ async def handle_image_message(
             return
 
         # Analyze with CV engine (Offloaded to a thread to prevent blocking event loop)
-        img = load_image_from_bytes(image_bytes)
-        if img is None:
+        result_tuple = load_image_from_bytes(image_bytes)
+        if result_tuple is None:
             await send_whatsapp_message(phone, get_message(lang, "send_photo"))
             return
             
+        img, size = result_tuple
         result = await asyncio.wait_for(
-            asyncio.to_thread(analyze_photo, img, marketplace), timeout=20
+            asyncio.to_thread(analyze_photo, img, marketplace, size), timeout=20
         )
 
         # Record usage
@@ -292,12 +293,13 @@ async def analyze_endpoint(
     if len(contents) > 10 * 1024 * 1024:  # 10MB limit
         raise HTTPException(status_code=413, detail="File too large")
         
-    img = load_image_from_bytes(contents)
-    if img is None:
+    result_tuple = load_image_from_bytes(contents)
+    if result_tuple is None:
         raise HTTPException(status_code=400, detail="Could not read image")
 
+    img, size = result_tuple
     result = await asyncio.wait_for(
-        asyncio.to_thread(analyze_photo, img, marketplace), timeout=20
+        asyncio.to_thread(analyze_photo, img, marketplace, size), timeout=20
     )
 
     return {

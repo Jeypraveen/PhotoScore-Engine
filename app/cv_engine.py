@@ -437,9 +437,12 @@ def analyze_text_watermark(img: np.ndarray, product_bbox: tuple = None) -> TextD
 # 6. RESOLUTION CHECK
 # ─────────────────────────────────────────────
 
-def check_resolution(img: np.ndarray, marketplace: str = "amazon") -> tuple[bool, int, int]:
+def check_resolution(img: np.ndarray, marketplace: str = "amazon", original_size: tuple[int, int] | None = None) -> tuple[bool, int, int]:
     """Check if image resolution meets marketplace requirements."""
-    h, w = img.shape[:2]
+    if original_size:
+        w, h = original_size
+    else:
+        h, w = img.shape[:2]
 
     min_requirements = {
         "amazon": 1000,
@@ -525,6 +528,7 @@ def check_marketplace_compliance(
 def analyze_photo(
     img: np.ndarray,
     marketplace: str = "amazon",
+    original_size: tuple[int, int] | None = None,
 ) -> PhotoScoreResult:
     """
     Complete photo quality analysis.
@@ -543,7 +547,7 @@ def analyze_photo(
 
     # Resolution check
     result.resolution_ok, result.resolution_width, result.resolution_height = (
-        check_resolution(img, marketplace)
+        check_resolution(img, marketplace, original_size)
     )
 
     # Total score (out of 100)
@@ -558,7 +562,7 @@ def analyze_photo(
     # Marketplace compliance
     all_marketplaces = ["amazon", "flipkart", "meesho", "etsy", "ebay", "shopify"]
     for mp in all_marketplaces:
-        res_ok, _, _ = check_resolution(img, mp)
+        res_ok, _, _ = check_resolution(img, mp, original_size)
         result.marketplace_pass[mp] = check_marketplace_compliance(
             result.background,
             result.product,

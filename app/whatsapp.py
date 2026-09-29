@@ -12,7 +12,8 @@ logger = logging.getLogger(__name__)
 
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN", "")
 WHATSAPP_PHONE_ID = os.environ.get("WHATSAPP_PHONE_ID", "")
-WHATSAPP_API_URL = f"https://graph.facebook.com/v20.0/{WHATSAPP_PHONE_ID}/messages"
+WHATSAPP_API_VERSION = os.environ.get("WHATSAPP_API_VERSION", "v20.0")
+WHATSAPP_API_URL = f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/{WHATSAPP_PHONE_ID}/messages"
 
 MARKETPLACE_MAP = {
     "1": "amazon",
@@ -70,7 +71,7 @@ async def download_whatsapp_media(media_id: str) -> bytes | None:
         # Step 1: Get media URL from media ID
         try:
             resp = await client.get(
-                f"https://graph.facebook.com/v20.0/{media_id}",
+                f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/{media_id}",
                 headers=headers,
             )
             if resp.status_code != 200:

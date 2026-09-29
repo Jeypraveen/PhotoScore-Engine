@@ -7,7 +7,7 @@ IMPORTANT: Run this SQL in your Supabase SQL Editor to create the tables:
 
 CREATE TABLE users (
     phone_number TEXT PRIMARY KEY,
-    language TEXT DEFAULT 'en',
+    language TEXT,
     marketplace TEXT DEFAULT 'amazon',
     is_paid BOOLEAN DEFAULT FALSE,
     paid_until TIMESTAMP WITH TIME ZONE DEFAULT NULL,
@@ -54,6 +54,7 @@ def init_db():
     except Exception as e:
         logger.error(f"Supabase connection failed: {e}")
         logger.error("Please ensure your SUPABASE_URL and SUPABASE_KEY are correct, and tables are created.")
+        raise e
 
 # ─────────────────────────────────────────────
 # USER MANAGEMENT
@@ -88,9 +89,10 @@ def set_user_marketplace(phone: str, marketplace: str):
     supabase = get_supabase()
     supabase.table("users").update({"marketplace": marketplace}).eq("phone_number", phone).execute()
 
-def set_user_paid(phone: str, paid_until: str):
+def set_user_paid(phone: str, paid_until: str) -> bool:
     supabase = get_supabase()
-    supabase.table("users").update({"is_paid": True, "paid_until": paid_until}).eq("phone_number", phone).execute()
+    resp = supabase.table("users").update({"is_paid": True, "paid_until": paid_until}).eq("phone_number", phone).execute()
+    return bool(resp.data)
 
 # ─────────────────────────────────────────────
 # USAGE TRACKING
