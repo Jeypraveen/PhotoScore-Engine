@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse
 import hmac
 import hashlib
 import re
+import time
 import razorpay
 
 def verify_sig(secret: str, raw: bytes, header: str) -> bool:
@@ -80,10 +81,7 @@ RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
 
 # Pricing by region (for display in messages)
 PRICING = {
-    "default": "$4.99",
-    "91": "₹299",      # India
-    "55": "R$29",       # Brazil
-    "52": "$99 MXN",    # Mexico
+    "default": "₹299",
 }
 
 
@@ -109,6 +107,8 @@ def startup():
     try:
         init_db()
         logger.info("PhotoScore Database initialized ✅")
+        if not RAZORPAY_KEY_ID or not RAZORPAY_KEY_SECRET:
+            logger.warning("RAZORPAY_KEY_ID or RAZORPAY_KEY_SECRET is not configured! Payment links will fall back to placeholder.")
         logger.info("PhotoScore Server started successfully 🚀")
     except Exception as e:
         logger.critical(f"Failed to initialize database during startup: {e}")
@@ -284,30 +284,48 @@ def get_price_for_phone(phone: str) -> str:
     return PRICING["default"]
 
 
+_PAYMENT_LINK_CACHE = {}
+
 def create_razorpay_link(phone: str, amount_paise: int = 29900) -> str:
-    """Create a dynamic Razorpay payment link with the user's phone attached."""
+    """Create a dynamic Razorpay payment link with the user's phone attached and cached."""
     if not RAZORPAY_KEY_ID or not RAZORPAY_KEY_SECRET:
         return "https://photoscore.app/pay"
         
+    now = time.time()
+    # Check cache (expire locally after 23 hours to be safe)
+    if phone in _PAYMENT_LINK_CACHE:
+        link, expiry = _PAYMENT_LINK_CACHE[phone]
+        if now < expiry:
+            return link
+        
     try:
         client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+        expire_by = int(now + 86400) # 24 hours
+        reference_id = f"ps_{phone}_{int(now)}"
+        contact = f"+{phone}" if not phone.startswith('+') else phone
+        
         data = {
             "amount": amount_paise,
             "currency": "INR",
             "description": "PhotoScore Pro (30 Days)",
+            "reference_id": reference_id,
             "customer": {
-                "contact": phone
+                "contact": contact
             },
             "notify": {
                 "sms": False,
                 "email": False
             },
+            "expire_by": expire_by,
             "notes": {
                 "phone_number": phone
             }
         }
         payment_link = client.payment_link.create(data)
-        return payment_link.get("short_url", "https://photoscore.app/pay")
+        url = payment_link.get("short_url", "https://photoscore.app/pay")
+        
+        _PAYMENT_LINK_CACHE[phone] = (url, now + 82800) # cache for 23 hours locally
+        return url
     except Exception as e:
         logger.error(f"Failed to create Razorpay link for {phone}: {e}")
         return "https://photoscore.app/pay"
@@ -420,8 +438,13 @@ async def razorpay_webhook(request: Request, background_tasks: BackgroundTasks):
         PLAN_PAISE = 29900  # ₹299
         
         event = body.get("event")
-        if event == "payment.captured":
-            payload = body.get("payload", {}).get("payment", {}).get("entity", {})
+        if event in ("payment.captured", "payment_link.paid"):
+            if event == "payment.captured":
+                payload = body.get("payload", {}).get("payment", {}).get("entity", {})
+                status_expected = "captured"
+            else:
+                payload = body.get("payload", {}).get("payment_link", {}).get("entity", {})
+                status_expected = "paid"
             
             notes = payload.get("notes")
             notes = notes if isinstance(notes, dict) else {}
@@ -432,7 +455,7 @@ async def razorpay_webhook(request: Request, background_tasks: BackgroundTasks):
             amount = payload.get("amount")
             currency = payload.get("currency")
             
-            if status == "captured" and amount == PLAN_PAISE and currency == "INR" and phone:
+            if status == status_expected and amount == PLAN_PAISE and currency == "INR" and phone:
                 user = await asyncio.to_thread(get_or_create_user, phone)
                 current_paid_until = user.get("paid_until")
                 
