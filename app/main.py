@@ -95,9 +95,16 @@ async def get_api_key(api_key_header: str = Security(api_key_header)):
         logger.critical("PHOTOSCORE_API_KEY is not configured! Endpoint access denied.")
         raise HTTPException(status_code=500, detail="Server misconfiguration")
     
-    # Use compare_digest to prevent timing attacks
-    if hmac.compare_digest(str(api_key_header), str(API_KEY)):
-        return api_key_header
+    if not api_key_header:
+        raise HTTPException(status_code=403, detail="Could not validate API key")
+        
+    # Use compare_digest to prevent timing attacks safely on bytes
+    try:
+        if hmac.compare_digest(api_key_header.encode('utf-8'), API_KEY.encode('utf-8')):
+            return api_key_header
+    except Exception:
+        pass
+        
     raise HTTPException(status_code=403, detail="Could not validate API key")
 
 
@@ -430,7 +437,14 @@ async def razorpay_webhook(request: Request, background_tasks: BackgroundTasks):
     Receives automated webhook from Razorpay when a user successfully pays.
     Automatically upgrades their account to unlimited checks.
     """
+    cl = request.headers.get("content-length")
+    if cl and cl.isdigit() and int(cl) > MAX_BODY:
+        raise HTTPException(status_code=413, detail="Payload too large")
+        
     raw_body = await request.body()
+    if len(raw_body) > MAX_BODY:
+        raise HTTPException(status_code=413, detail="Payload too large")
+        
     signature = request.headers.get("X-Razorpay-Signature", "")
     event_id = request.headers.get("X-Razorpay-Event-Id", "")
     
@@ -537,14 +551,8 @@ async def razorpay_webhook(request: Request, background_tasks: BackgroundTasks):
 
 @app.get("/health")
 async def health():
-    """Health check endpoint."""
-    try:
-        supabase = get_supabase()
-        supabase.table("users").select("phone_number").limit(1).execute()
-        return {"status": "ok", "service": "PhotoScore", "version": "1.0.0", "db": "connected"}
-    except Exception as e:
-        logger.error(f"Healthcheck failed: {e}")
-        raise HTTPException(status_code=503, detail="Service Unavailable - Database connection failed")
+    """Shallow health check endpoint for load balancers."""
+    return {"status": "ok", "service": "PhotoScore", "version": "1.0.0"}
 
 
 @app.get("/stats")

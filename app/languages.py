@@ -42,7 +42,7 @@ MESSAGES = {
     "en": {
         "welcome": "Hello! 📸 I'm *PhotoScore*\nSend me your product photo and I'll tell you if it will sell!\n\nWhich marketplace?\n1. Amazon\n2. Flipkart\n3. Meesho\n4. Etsy\n5. eBay\n6. Shopify\n7. Other / Instagram",
         "marketplace_set": "✅ *{marketplace}* selected!\nNow send me your product photo 📸",
-        "send_photo": "Please send me a product photo to analyze 📸",
+        "send_photo": "Please send me a product photo to analyze 📸\n\n*(Tip: Send as a 'Document' so WhatsApp doesn't compress the quality!)*",
         "analyzing": "🔍 Analyzing your photo...",
         "score_header": "📊 *PhotoScore: {score}/100* {emoji}",
         "category_bg": "🔲 Background ({score}/25)",
