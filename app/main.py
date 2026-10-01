@@ -51,13 +51,16 @@ from app.database import (
     get_or_create_user,
     set_user_language,
     set_user_marketplace,
-    record_usage,
-    get_remaining_checks,
-    can_check,
+    consume_check_rpc,
+    update_usage_score,
     get_total_users,
     get_total_checks,
     get_paid_users,
-    set_user_paid,
+    apply_payment_rpc,
+    claim_event,
+    release_event,
+    get_supabase,
+)
     get_supabase,
     claim_event,
     release_event,
@@ -248,8 +251,9 @@ async def handle_image_message(
 ):
     """Handle image messages — download, analyze, and reply with score."""
     try:
-        # Check usage limits
-        if not can_check(phone):
+        # Check usage limits atomically
+        usage_id = await asyncio.to_thread(consume_check_rpc, phone)
+        if not usage_id:
             price = get_price_for_phone(phone)
             await send_whatsapp_message(
                 phone,
@@ -283,8 +287,8 @@ async def handle_image_message(
                 loop.run_in_executor(CV_POOL, analyze_photo, img, marketplace, size), timeout=25
             )
 
-        # Record usage
-        await asyncio.to_thread(record_usage, phone, result.total_score)
+        # Record usage score
+        await asyncio.to_thread(update_usage_score, usage_id, result.total_score)
 
         # Get remaining checks
         remaining, total = await asyncio.to_thread(get_remaining_checks, phone)
@@ -496,40 +500,19 @@ async def razorpay_webhook(request: Request, background_tasks: BackgroundTasks):
                 # Dedupe on the actual payment/payment_link entity ID to prevent double-delivery double-crediting
                 dedupe_key = f"pay:{payment_id}"
                 try:
-                    is_new_payment = await asyncio.to_thread(claim_event, dedupe_key)
-                    if not is_new_payment:
-                        logger.info(f"Payment {payment_id} already processed. Skipping.")
-                        return JSONResponse({"status": "ok"})
-                except Exception as e:
-                    logger.error(f"Database error during Razorpay payment claim: {e}")
-                    raise HTTPException(status_code=503, detail="Database error")
+                    # Apply payment atomically via Postgres (handles deduplication and user update in one go)
+                    paid_until = await asyncio.to_thread(apply_payment_rpc, dedupe_key, phone, 30)
                     
-                try:
-                    user = await asyncio.to_thread(get_or_create_user, phone)
-                    current_paid_until = user.get("paid_until")
-                    
-                    from datetime import timedelta
-                    now = datetime.now(timezone.utc)
-                    
-                    if current_paid_until and datetime.fromisoformat(current_paid_until.replace("Z", "+00:00")) > now:
-                        new_paid_until = (datetime.fromisoformat(current_paid_until.replace("Z", "+00:00")) + timedelta(days=30)).isoformat()
-                    else:
-                        new_paid_until = (now + timedelta(days=30)).isoformat()
-                    
-                    # Upgrade user in the database
-                    updated = await asyncio.to_thread(set_user_paid, phone, new_paid_until)
-                    
-                    if updated:
+                    if paid_until:
                         await send_whatsapp_message(
                             phone, 
                             "🎉 *Payment Successful!*\nYour PhotoScore Pro plan is now active for 30 days. You have UNLIMITED checks! Send a photo to begin 📸"
                         )
-                        logger.info(f"Account upgraded to PRO for {phone}")
+                        logger.info(f"Account upgraded to PRO for {phone} until {paid_until}")
                     else:
-                        logger.error(f"Paid but no matching user for phone: {phone}")
-                except Exception:
-                    # Release the payment claim if something fails during the upgrade
-                    await asyncio.to_thread(release_event, dedupe_key)
+                        logger.info(f"Payment {payment_id} was already processed or phone missing.")
+                except Exception as e:
+                    logger.error(f"Error applying payment: {e}")
                     raise
             else:
                 logger.warning(

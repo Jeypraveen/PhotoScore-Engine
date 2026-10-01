@@ -102,52 +102,52 @@ def set_user_marketplace(phone: str, marketplace: str):
     supabase = get_supabase()
     supabase.table("users").update({"marketplace": marketplace}).eq("phone_number", phone).execute()
 
-def set_user_paid(phone: str, paid_until: str) -> bool:
+def apply_payment_rpc(dedupe_key: str, phone: str, days: int = 30) -> str | None:
+    """Atomic payment processor via Postgres. Returns new paid_until or None if duplicate."""
     supabase = get_supabase()
-    resp = supabase.table("users").update({"is_paid": True, "paid_until": paid_until}).eq("phone_number", phone).execute()
-    return bool(resp.data)
+    resp = supabase.rpc(
+        "apply_payment",
+        {"p_key": dedupe_key, "p_phone": phone, "p_days": days}
+    ).execute()
+    return resp.data
 
 # ─────────────────────────────────────────────
-# USAGE TRACKING
+# USAGE TRACKING (Atomic RPC)
 # ─────────────────────────────────────────────
 
-def record_usage(phone: str, score: int = 0):
+def consume_check_rpc(phone: str) -> int | None:
+    """Atomic quota check via Postgres function. Returns usage ID if allowed."""
     supabase = get_supabase()
-    supabase.table("usage").insert({"phone_number": phone, "score": score}).execute()
+    today = date.today().isoformat()
+    start_of_day = f"{today}T00:00:00Z"
+    
+    resp = supabase.rpc(
+        "consume_check", 
+        {"p_phone": phone, "p_limit": FREE_DAILY_LIMIT, "p_day_start": start_of_day}
+    ).execute()
+    return resp.data
 
+def update_usage_score(usage_id: int, score: int):
+    """Updates the usage row with the final cv score."""
+    supabase = get_supabase()
+    supabase.table("usage").update({"score": score}).eq("id", usage_id).execute()
+
+# Retaining these purely for display in the /stats or other logic if needed
 def get_daily_usage(phone: str) -> int:
     supabase = get_supabase()
     today = date.today().isoformat()
-    
-    # In Supabase REST API, filtering by exact date function requires some tricks,
-    # so we filter by >= start of day
     start_of_day = f"{today}T00:00:00Z"
-    
-    # Fetch count using select method
     response = supabase.table("usage").select("id", count="exact").eq("phone_number", phone).gte("used_at", start_of_day).execute()
     return response.count if response.count is not None else 0
 
 def get_remaining_checks(phone: str) -> tuple[int, int]:
     user = get_or_create_user(phone)
-
-    # Paid users get unlimited
-    if user.get("is_paid"):
-        if user.get("paid_until"):
-            paid_until = datetime.fromisoformat(user["paid_until"].replace("Z", "+00:00"))
-            if paid_until.timestamp() > datetime.now(timezone.utc).timestamp():
-                return (999, 999)  # Unlimited
-            else:
-                # Subscription expired
-                supabase = get_supabase()
-                supabase.table("users").update({"is_paid": False}).eq("phone_number", phone).execute()
-
+    if user.get("is_paid") and user.get("paid_until"):
+        paid_until = datetime.fromisoformat(user["paid_until"].replace("Z", "+00:00"))
+        if paid_until.timestamp() > datetime.now(timezone.utc).timestamp():
+            return (999, 999)
     used = get_daily_usage(phone)
-    remaining = max(0, FREE_DAILY_LIMIT - used)
-    return (remaining, FREE_DAILY_LIMIT)
-
-def can_check(phone: str) -> bool:
-    remaining, _ = get_remaining_checks(phone)
-    return remaining > 0
+    return (max(0, FREE_DAILY_LIMIT - used), FREE_DAILY_LIMIT)
 
 # ─────────────────────────────────────────────
 # STATS
