@@ -60,10 +60,7 @@ from app.database import (
     claim_event,
     release_event,
     get_supabase,
-)
-    get_supabase,
-    claim_event,
-    release_event,
+    get_remaining_checks,
 )
 
 logging.basicConfig(level=logging.INFO)
