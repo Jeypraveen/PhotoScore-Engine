@@ -331,20 +331,29 @@ def analyze_sharpness(img: np.ndarray) -> SharpnessResult:
 # 4. LIGHTING / BRIGHTNESS ANALYSIS
 # ─────────────────────────────────────────────
 
-def analyze_lighting(img: np.ndarray) -> LightingResult:
+def analyze_lighting(img: np.ndarray, bg_is_white: bool = False) -> LightingResult:
     """
     Check if image has good lighting — not too dark, not too bright.
-    Uses HSV Value channel to prevent saturated colors from reading as dark.
+    Excludes white background pixels if bg_is_white is True.
     """
     result = LightingResult()
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    v_channel = hsv[:, :, 2]
+    g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    
+    # Exclude pure white pixels (often background) if the background is primarily white
+    if bg_is_white and (g < 240).mean() > 0.03:
+        px = g[g < 240]
+    else:
+        px = g.ravel()
 
-    result.brightness = round(float(v_channel.mean()), 1)
-    result.contrast = round(float(v_channel.std()), 1)
+    if len(px) == 0:
+        px = g.ravel()
 
-    result.overexposed_pct = round(float((v_channel > 250).mean() * 100), 1)
-    result.underexposed_pct = round(float((v_channel < 20).mean() * 100), 1)
+    result.brightness = round(float(px.mean()), 1)
+    result.contrast = round(float(px.std()), 1)
+    
+    p2, p98 = np.percentile(g, (2, 98))
+    result.overexposed_pct = float(p98 > 250) * 100
+    result.underexposed_pct = float(p2 < 20) * 100
 
     # Good lighting: brightness 100-235, contrast > 30
     good_brightness = 100 <= result.brightness <= 235
@@ -477,7 +486,7 @@ def check_marketplace_compliance(
     rules = {
         "amazon": (
             bg.is_white_bg
-            and product.product_fill_percent > 80
+            and product.product_fill_percent >= 85
             and not text.has_watermark_or_text
             and resolution_ok
             and sharpness.is_sharp
@@ -542,7 +551,7 @@ def analyze_photo(
     result.background = analyze_background(img)
     result.product = analyze_product(img)
     result.sharpness = analyze_sharpness(img)
-    result.lighting = analyze_lighting(img)
+    result.lighting = analyze_lighting(img, bg_is_white=result.background.is_white_bg)
     result.text_detection = analyze_text_watermark(img, product_bbox=result.product.bounding_box if result.product.product_found else None)
 
     # Resolution check

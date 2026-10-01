@@ -34,7 +34,7 @@ def verify_sig(secret: str, raw: bytes, header: str) -> bool:
 
 from app.cv_engine import analyze_photo, load_image_from_bytes
 from app.whatsapp import (
-    extract_message_data,
+    extract_all_messages,
     send_whatsapp_message,
     download_whatsapp_media,
     MARKETPLACE_MAP,
@@ -140,10 +140,27 @@ async def verify_webhook(request: Request):
     raise HTTPException(status_code=403, detail="Verification failed")
 
 
+import json
+from concurrent.futures import ThreadPoolExecutor
+import os
+import asyncio
+
+CV_N = int(os.environ.get("CV_CONCURRENCY", "2"))
+CV_SEM = asyncio.Semaphore(CV_N)
+CV_POOL = ThreadPoolExecutor(max_workers=CV_N)
+MAX_BODY = 1_000_000
+
 @app.post("/webhook")
 async def handle_webhook(request: Request, background_tasks: BackgroundTasks):
     """Handle incoming WhatsApp messages — main bot logic."""
+    cl = request.headers.get("content-length")
+    if cl and cl.isdigit() and int(cl) > MAX_BODY:
+        raise HTTPException(status_code=413, detail="Payload too large")
+        
     raw_body = await request.body()
+    if len(raw_body) > MAX_BODY:
+        raise HTTPException(status_code=413, detail="Payload too large")
+        
     signature = request.headers.get("X-Hub-Signature-256", "")
     
     if not META_APP_SECRET:
@@ -153,23 +170,21 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks):
     if not verify_sig(META_APP_SECRET, raw_body, signature):
         raise HTTPException(status_code=403, detail="Invalid signature")
 
-    body = await request.json()
-    msg_data = extract_message_data(body)
+    body = json.loads(raw_body)
+    
+    for msg_data in extract_all_messages(body):
+        wamid = msg_data.get("wamid")
+        if wamid:
+            try:
+                is_new = await asyncio.to_thread(claim_event, wamid)
+                if not is_new:
+                    continue
+            except Exception as e:
+                logger.error(f"Database error during wamid claim: {e}")
+                raise HTTPException(status_code=503, detail="Database error")
+                
+        background_tasks.add_task(process_whatsapp_message, msg_data)
 
-    if not msg_data:
-        return JSONResponse({"status": "no message"})
-
-    wamid = msg_data.get("wamid")
-    if wamid:
-        try:
-            is_new = await asyncio.to_thread(claim_event, wamid)
-            if not is_new:
-                return JSONResponse({"status": "ok"})
-        except Exception as e:
-            logger.error(f"Database error during wamid claim: {e}")
-            raise HTTPException(status_code=503, detail="Database error")
-
-    background_tasks.add_task(process_whatsapp_message, msg_data)
     return JSONResponse({"status": "ok"})
 
 
@@ -248,16 +263,18 @@ async def handle_image_message(
             await send_whatsapp_message(phone, get_message(lang, "send_photo"))
             return
 
-        # Analyze with CV engine (Offloaded to a thread to prevent blocking event loop)
-        result_tuple = load_image_from_bytes(image_bytes)
-        if result_tuple is None:
-            await send_whatsapp_message(phone, get_message(lang, "send_photo"))
-            return
-            
-        img, size = result_tuple
-        result = await asyncio.wait_for(
-            asyncio.to_thread(analyze_photo, img, marketplace, size), timeout=20
-        )
+        # Analyze with CV engine (Offloaded to a thread pool with concurrency limits)
+        loop = asyncio.get_running_loop()
+        async with CV_SEM:
+            result_tuple = await loop.run_in_executor(CV_POOL, load_image_from_bytes, image_bytes)
+            if result_tuple is None:
+                await send_whatsapp_message(phone, get_message(lang, "send_photo"))
+                return
+                
+            img, size = result_tuple
+            result = await asyncio.wait_for(
+                loop.run_in_executor(CV_POOL, analyze_photo, img, marketplace, size), timeout=25
+            )
 
         # Record usage
         await asyncio.to_thread(record_usage, phone, result.total_score)

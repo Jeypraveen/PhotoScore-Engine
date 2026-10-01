@@ -101,40 +101,19 @@ async def download_whatsapp_media(media_id: str) -> bytes | None:
             return None
 
 
-def extract_message_data(body: dict) -> dict | None:
-    """
-    Extract relevant data from incoming WhatsApp webhook payload.
-    
-    Returns dict with: phone, type (text/image), text_body, media_id
-    """
-    try:
-        entry = body.get("entry", [{}])[0]
-        changes = entry.get("changes", [{}])[0]
-        value = changes.get("value", {})
-        messages = value.get("messages", [])
-
-        if not messages:
-            return None
-
-        msg = messages[0]
-        phone = msg.get("from", "")
-        msg_type = msg.get("type", "")
-
-        data = {
-            "wamid": msg.get("id", ""),
-            "phone": phone,
-            "type": msg_type,
-            "text_body": "",
-            "media_id": "",
-        }
-
-        if msg_type == "text":
-            data["text_body"] = msg.get("text", {}).get("body", "").strip()
-        elif msg_type == "image":
-            data["media_id"] = msg.get("image", {}).get("id", "")
-
-        return data
-
-    except (IndexError, KeyError, TypeError) as e:
-        logger.error(f"Failed to parse webhook: {e}")
-        return None
+def extract_all_messages(body: dict) -> list[dict]:
+    out = []
+    for entry in body.get("entry") or []:
+        for ch in entry.get("changes") or []:
+            for m in (ch.get("value") or {}).get("messages") or []:
+                t = m.get("type", "")
+                d = {"wamid": m.get("id", ""), "phone": m.get("from", ""),
+                     "type": t, "text_body": "", "media_id": ""}
+                if t == "text":
+                    d["text_body"] = (m.get("text") or {}).get("body", "").strip()
+                elif t == "image":
+                    d["media_id"] = (m.get("image") or {}).get("id", "")
+                elif t == "document" and (m.get("document") or {}).get("mime_type", "").startswith("image/"):
+                    d["type"], d["media_id"] = "image", m["document"].get("id", "")
+                out.append(d)
+    return out
