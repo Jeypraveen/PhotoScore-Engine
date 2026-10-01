@@ -39,13 +39,13 @@ def test_razorpay_duplicate_event(mock_claim, mock_verify):
 @patch("app.main.verify_sig")
 @patch("app.main.claim_event")
 @patch("app.main.release_event")
-@patch("app.main.get_or_create_user")
-def test_razorpay_failure_after_claim(mock_get_user, mock_release, mock_claim, mock_verify):
+@patch("app.main.apply_payment_rpc")
+def test_razorpay_failure_after_claim(mock_apply, mock_release, mock_claim, mock_verify):
     mock_verify.return_value = True
     mock_claim.return_value = True
     
     # Simulate failure during the actual processing
-    mock_get_user.side_effect = Exception("Failed to get user")
+    mock_apply.side_effect = Exception("Failed to apply payment")
     
     response = client.post(
         "/payment/webhook",
@@ -58,24 +58,17 @@ def test_razorpay_failure_after_claim(mock_get_user, mock_release, mock_claim, m
     
     # Expected to throw 500 so Razorpay retries
     assert response.status_code == 500
-    # Also expected to have released both the event and the payment entity
-    mock_release.assert_any_call("pay:pay_123")
-    mock_release.assert_any_call("evt_456")
-    assert mock_release.call_count == 2
+    mock_apply.assert_called_once_with("pay:pay_123", "919999999999", 30)
 
 @patch("app.main.verify_sig")
 @patch("app.main.claim_event")
-@patch("app.main.set_user_paid")
-@patch("app.main.get_or_create_user")
-def test_razorpay_double_event_types(mock_get_user, mock_set_paid, mock_claim, mock_verify):
+@patch("app.main.apply_payment_rpc")
+def test_razorpay_double_event_types(mock_apply, mock_claim, mock_verify):
     mock_verify.return_value = True
+    mock_claim.return_value = True
     
-    # claim_event returns True on the first call (for the event id), True on the second (for the pay id)
-    # On the second webhook, it returns True for the event id, but False for the pay id!
-    mock_claim.side_effect = [True, True, True, False]
-    
-    mock_get_user.return_value = {"paid_until": None}
-    mock_set_paid.return_value = True
+    # apply_payment_rpc returns date string on first success, None on second (duplicate)
+    mock_apply.side_effect = ["2024-12-01T00:00:00Z", None]
     
     payload_captured = {
         "event": "payment.captured",
@@ -98,6 +91,6 @@ def test_razorpay_double_event_types(mock_get_user, mock_set_paid, mock_claim, m
     res2 = client.post("/payment/webhook", headers={"X-Razorpay-Event-Id": "evt_link_1"}, json=payload_paid)
     assert res2.status_code == 200
     
-    # Verify that the user was upgraded exactly once despite two webhooks arriving
-    mock_set_paid.assert_called_once()
+    # Verify that the atomic RPC was called twice (once per webhook payload)
+    assert mock_apply.call_count == 2
 
